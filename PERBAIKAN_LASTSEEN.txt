@@ -1,0 +1,25 @@
+LASTSEEN - HASIL PERBAIKAN PROJECT
+
+Perubahan:
+1. Mengganti 11 import package:lingolens/ menjadi package:lastseen/.
+2. Mengubah nama yang tampak di UI, judul aplikasi, dan Android launcher label menjadi LastSeen.
+3. Menggunakan assets/Logo/logo.png sebagai logo asli pada Animated Splash Screen.
+4. Memperbarui ikon launcher Android (mipmap) dan ikon web dari logo asli.
+5. Menghilangkan pita DEBUG pada MaterialApp.
+6. Memastikan warna native splash Android tetap putih.
+7. Mempertahankan applicationId com.example.lingolens agar tidak memutus instalasi lama.
+8. File sumber lain, termasuk kamera, OCR, galeri dan quiz, dipertahankan.
+
+Cara menjalankan di Windows:
+1. Ekstrak ZIP ke folder baru, mis. D:\LastSeen_Fixed\LastSeen.
+2. Buka folder LastSeen dengan VS Code.
+3. Pada terminal jalankan: flutter pub get
+4. Jalankan: flutter analyze
+5. Sambungkan HP lalu: flutter run
+
+Catatan:
+- ZIP tidak menyertakan direktori build, .dart_tool, dan local.properties; semua itu
+  merupakan file mesin/cache yang dibuat ulang oleh Flutter.
+- Flutter SDK tidak tersedia pada lingkungan pembuatan ZIP ini, sehingga build
+  Android dan flutter analyze belum dapat dieksekusi di sini.
+- Jika Android Studio meminta SDK/Gradle download, ikuti pesan lokal Flutter.
