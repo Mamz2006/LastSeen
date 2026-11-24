@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -9,6 +11,11 @@ import '../widgets/bottom_nav.dart';
 import 's04b_camera_capture.dart';
 import 's05_ocr_review.dart';
 import 's06_import_document.dart';
+
+// ==========================================
+// SMART SCAN LASTSEEN
+// LIVE CAMERA + FULLSCREEN + OCR
+// ==========================================
 
 class S04SmartScan extends StatefulWidget {
   const S04SmartScan({super.key});
@@ -26,7 +33,9 @@ class _S04SmartScanState extends State<S04SmartScan>
   static const Color border = Color(0xFFDDE3F0);
 
   CameraController? _cameraController;
+
   Future<void>? _startingCamera;
+  Future<void>? _stoppingCamera;
 
   final ImagePicker _imagePicker = ImagePicker();
 
@@ -40,7 +49,11 @@ class _S04SmartScanState extends State<S04SmartScan>
   String? _error;
 
   bool get _shouldRunCamera =>
-      _tabVisible && _appVisible && !_suspended && !kIsWeb;
+      !kIsWeb && mounted && _tabVisible && _appVisible && !_suspended;
+
+  bool _isCurrentCamera(int token) {
+    return _shouldRunCamera && token == _cameraToken;
+  }
 
   // ==========================================
   // LIFECYCLE
@@ -49,62 +62,108 @@ class _S04SmartScanState extends State<S04SmartScan>
   @override
   void initState() {
     super.initState();
+
     WidgetsBinding.instance.addObserver(this);
   }
 
-  // Kamera hanya aktif ketika tab Scan terlihat.
-  // Ini penting karena MainTabShell menyimpan
-  // halaman lain di dalam Stack.
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
 
+    // MainTabShell menggunakan TickerMode.
+    // Kamera hanya aktif pada tab Scan.
     final visible = TickerMode.of(context);
 
     if (_tabVisible != visible) {
       _tabVisible = visible;
 
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          _syncCamera();
-        }
-      });
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) {
+          if (mounted) {
+            _syncCamera();
+          }
+        },
+      );
     }
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
+  void didChangeAppLifecycleState(
+    AppLifecycleState state,
+  ) {
     _appVisible = state == AppLifecycleState.resumed;
+
     _syncCamera();
   }
 
   // ==========================================
-  // MEMULAI / MENGHENTIKAN KAMERA
+  // SINKRONISASI STATUS KAMERA
   // ==========================================
 
   void _syncCamera() {
     if (!mounted || kIsWeb) return;
 
-    if (_shouldRunCamera) {
-      if (_cameraController == null && _startingCamera == null) {
-        final token = ++_cameraToken;
-        _startingCamera = _startCamera(token);
-      }
-    } else {
+    if (!_shouldRunCamera) {
       if (_cameraController != null || _startingCamera != null) {
-        _stopCamera();
+        unawaited(_stopCamera());
+      }
+      return;
+    }
+
+    // Jangan buka kamera baru ketika
+    // kamera sebelumnya masih dilepas.
+    if (_stoppingCamera != null) return;
+
+    // Jangan membuat dua controller.
+    if (_cameraController != null || _startingCamera != null) {
+      return;
+    }
+
+    unawaited(_startCamera());
+  }
+
+  // ==========================================
+  // MEMULAI KAMERA REAL-TIME
+  // ==========================================
+
+  Future<void> _startCamera() async {
+    if (!_shouldRunCamera ||
+        _cameraController != null ||
+        _startingCamera != null ||
+        _stoppingCamera != null) {
+      return;
+    }
+
+    final token = ++_cameraToken;
+
+    final request = _initializeCamera(token);
+    _startingCamera = request;
+
+    try {
+      await request;
+    } finally {
+      if (identical(_startingCamera, request)) {
+        _startingCamera = null;
       }
     }
   }
 
-  Future<void> _startCamera(int token) async {
-    CameraController? created;
+  // ==========================================
+  // INISIALISASI + RETRY
+  // ==========================================
 
+  Future<void> _initializeCamera(int token) async {
     try {
       final cameras = await availableCameras();
 
+      if (!_isCurrentCamera(token)) {
+        return;
+      }
+
       if (cameras.isEmpty) {
-        throw StateError('Kamera tidak ditemukan.');
+        throw StateError(
+          'Tidak ada kamera pada perangkat.',
+        );
       }
 
       final backCamera = cameras.firstWhere(
@@ -112,58 +171,127 @@ class _S04SmartScanState extends State<S04SmartScan>
         orElse: () => cameras.first,
       );
 
-      created = CameraController(
-        backCamera,
-        ResolutionPreset.high,
-        enableAudio: false,
-      );
+      // Coba maksimal tiga kali.
+      // Berguna saat kamera fullscreen
+      // baru saja ditutup.
+      for (int attempt = 0; attempt < 3; attempt++) {
+        if (!_isCurrentCamera(token)) {
+          return;
+        }
 
-      await created.initialize();
+        CameraController? created;
 
-      // Jika pengguna sudah pindah tab atau
-      // membuka kamera fullscreen, jangan
-      // mengambil alih kamera lagi.
-      if (!mounted || token != _cameraToken || !_shouldRunCamera) {
-        await created.dispose();
-        return;
-      }
-
-      setState(() {
-        _cameraController = created;
-        _error = null;
-      });
-    } catch (_) {
-      if (created != null) {
         try {
-          await created.dispose();
-        } catch (_) {}
-      }
+          created = CameraController(
+            backCamera,
+            ResolutionPreset.high,
+            enableAudio: false,
+          );
 
-      if (mounted && token == _cameraToken && _shouldRunCamera) {
-        setState(() {
-          _error = 'Kamera tidak dapat dibuka. Periksa izin kamera.';
-        });
+          await created.initialize();
+
+          // Jika pengguna sudah pindah tab
+          // atau membuka fullscreen,
+          // controller ini tidak boleh dipakai.
+          if (!_isCurrentCamera(token)) {
+            await created.dispose();
+            return;
+          }
+
+          setState(() {
+            _cameraController = created;
+            _error = null;
+          });
+
+          return;
+        } catch (_) {
+          if (created != null) {
+            try {
+              await created.dispose();
+            } catch (_) {}
+          }
+
+          if (!_isCurrentCamera(token)) {
+            return;
+          }
+
+          if (attempt < 2) {
+            // Tunggu kamera Android siap lagi.
+            await Future<void>.delayed(
+              Duration(
+                milliseconds: 400 + attempt * 250,
+              ),
+            );
+          } else {
+            if (mounted) {
+              setState(() {
+                _error = 'Kamera gagal dibuka. '
+                    'Tekan Coba lagi.';
+              });
+            }
+          }
+        }
       }
-    } finally {
-      if (token == _cameraToken) {
-        _startingCamera = null;
+    } catch (_) {
+      if (_isCurrentCamera(token)) {
+        setState(() {
+          _error = 'Tidak dapat mengakses kamera. '
+              'Periksa izin kamera.';
+        });
       }
     }
   }
 
+  // ==========================================
+  // MENGHENTIKAN KAMERA DENGAN AMAN
+  // ==========================================
+
   Future<void> _stopCamera() async {
-    // Batalkan proses inisialisasi yang lama.
+    // Batalkan semua inisialisasi lama.
     _cameraToken++;
 
-    final pending = _startingCamera;
+    // Jika sedang ada proses stop,
+    // tunggu proses itu selesai.
+    final ongoingStop = _stoppingCamera;
 
-    if (pending != null) {
-      try {
-        await pending;
-      } catch (_) {}
+    if (ongoingStop != null) {
+      await ongoingStop;
+      return;
     }
 
-    _startingCamera = null;
+    final request = _releaseCamera();
+    _stoppingCamera = request;
+
+    try {
+      await request;
+    } finally {
+      if (identical(_stoppingCamera, request)) {
+        _stoppingCamera = null;
+      }
+
+      // Jika tab kembali aktif selama
+      // kamera lama sedang dilepas,
+      // hidupkan kamera setelah aman.
+      if (mounted && _shouldRunCamera) {
+        _syncCamera();
+      }
+    }
+  }
+
+  // ==========================================
+  // MELEPAS RESOURCE KAMERA
+  // ==========================================
+
+  Future<void> _releaseCamera() async {
+    // Tunggu inisialisasi sebelumnya
+    // berhenti dan membuang controllernya.
+    final starting = _startingCamera;
+
+    if (starting != null) {
+      try {
+        await starting;
+      } catch (_) {}
+    }
 
     final oldController = _cameraController;
     _cameraController = null;
@@ -177,16 +305,24 @@ class _S04SmartScanState extends State<S04SmartScan>
         await oldController.dispose();
       } catch (_) {}
     }
-
-    // Jika tab aktif lagi sebelum proses stop
-    // selesai, kamera boleh dimulai ulang.
-    if (mounted && _shouldRunCamera) {
-      _syncCamera();
-    }
   }
 
   // ==========================================
-  // OCR FOTO
+  // PESAN
+  // ==========================================
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+      ),
+    );
+  }
+
+  // ==========================================
+  // OCR
   // ==========================================
 
   Future<String> _recognizeImage(String path) async {
@@ -195,24 +331,18 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
 
     try {
-      final inputImage = InputImage.fromFilePath(path);
-      final result = await recognizer.processImage(inputImage);
+      final image = InputImage.fromFilePath(path);
+
+      final result = await recognizer.processImage(image);
+
       return result.text.trim();
     } finally {
       await recognizer.close();
     }
   }
 
-  void _showMessage(String message) {
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
-  }
-
   // ==========================================
-  // TAMPILKAN HASIL OCR
+  // HALAMAN HASIL OCR
   // ==========================================
 
   Future<void> _openOcrResult(String text) async {
@@ -227,25 +357,31 @@ class _S04SmartScanState extends State<S04SmartScan>
     if (!mounted) return;
 
     try {
-      await Navigator.of(context).push<void>(
-        MaterialPageRoute(
-          builder: (_) => S05OcrReview(
-            initialText: text,
-          ),
+      final route = MaterialPageRoute<void>(
+        builder: (_) => S05OcrReview(
+          initialText: text,
         ),
       );
+
+      await Navigator.of(context).push<void>(
+        route,
+      );
+
+      // Tunggu animasi penutupan halaman OCR.
+      await route.completed;
     } finally {
       if (mounted) {
         setState(() {
           _suspended = false;
         });
+
         _syncCamera();
       }
     }
   }
 
   // ==========================================
-  // PINDAI LANGSUNG DARI HALAMAN SCAN
+  // PINDAI LANGSUNG
   // ==========================================
 
   Future<void> _captureInline() async {
@@ -254,7 +390,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     final controller = _cameraController;
 
     if (controller == null || !controller.value.isInitialized) {
-      _showMessage('Kamera sedang disiapkan.');
+      _showMessage(
+        'Kamera sedang disiapkan.',
+      );
       return;
     }
 
@@ -266,30 +404,36 @@ class _S04SmartScanState extends State<S04SmartScan>
     try {
       final photo = await controller.takePicture();
 
-      final text = await _recognizeImage(photo.path);
+      final text = await _recognizeImage(
+        photo.path,
+      );
 
       if (!mounted) return;
 
       if (text.isEmpty) {
         _showMessage(
-          'Tidak ada teks terdeteksi. Coba arahkan kamera lebih dekat.',
+          'Tidak ada teks terdeteksi. '
+          'Coba arahkan kamera lebih dekat.',
         );
       } else {
         await _openOcrResult(text);
       }
     } catch (_) {
       _showMessage(
-        'Gagal memindai foto. Coba lagi.',
+        'Gagal memindai gambar. Coba lagi.',
       );
     } finally {
       if (mounted) {
-        setState(() => _busy = false);
+        setState(() {
+          _busy = false;
+        });
       }
     }
   }
 
   // ==========================================
-  // TOMBOL PERBESAR KAMERA
+  // MODE KAMERA PENUH
+  // PERBAIKAN KAMERA TIDAK KEMBALI
   // ==========================================
 
   Future<void> _openFullCamera() async {
@@ -297,7 +441,7 @@ class _S04SmartScanState extends State<S04SmartScan>
 
     if (kIsWeb) {
       _showMessage(
-        'Gunakan aplikasi Android untuk membuka kamera.',
+        'Gunakan Android untuk membuka kamera.',
       );
       return;
     }
@@ -307,44 +451,64 @@ class _S04SmartScanState extends State<S04SmartScan>
       _error = null;
     });
 
-    // WAJIB: lepaskan kamera kecil dulu
-    // agar kamera fullscreen tidak bentrok.
+    // 1. Lepaskan kamera kecil sepenuhnya.
     await _stopCamera();
 
     if (!mounted) return;
 
+    final cameraRoute = MaterialPageRoute<String>(
+      builder: (_) => const S04BCameraCapture(),
+    );
+
     try {
+      // 2. Buka kamera mode penuh.
       final scannedText = await Navigator.of(context).push<String>(
-        MaterialPageRoute(
-          builder: (_) => const S04BCameraCapture(),
-        ),
+        cameraRoute,
       );
+
+      // 3. Tunggu hingga route kamera
+      // selesai ditutup, termasuk animasinya.
+      await cameraRoute.completed;
 
       if (!mounted) return;
 
-      // Mode kamera lama mengembalikan
-      // hasil OCR melalui Navigator.pop.
+      // 4. Jika OCR berhasil,
+      // tampilkan hasil pemindaian.
       if (scannedText != null && scannedText.trim().isNotEmpty) {
-        await Navigator.of(context).push<void>(
-          MaterialPageRoute(
-            builder: (_) => S05OcrReview(
-              initialText: scannedText,
-            ),
+        final resultRoute = MaterialPageRoute<void>(
+          builder: (_) => S05OcrReview(
+            initialText: scannedText,
           ),
         );
+
+        await Navigator.of(context).push<void>(
+          resultRoute,
+        );
+
+        await resultRoute.completed;
       }
     } catch (_) {
       _showMessage(
         'Mode kamera penuh gagal dibuka.',
       );
     } finally {
+      // 5. Beri kesempatan kamera native
+      // menyelesaikan pelepasan resource.
+      await Future<void>.delayed(
+        const Duration(milliseconds: 350),
+      );
+
       if (mounted) {
         setState(() {
           _suspended = false;
+          _error = null;
         });
 
-        // Kamera kecil aktif lagi
-        // setelah kembali ke halaman Scan.
+        // 6. Periksa kembali apakah tab Scan
+        // masih terlihat.
+        _tabVisible = TickerMode.of(context);
+
+        // 7. Nyalakan kamera kecil kembali.
         _syncCamera();
       }
     }
@@ -359,7 +523,7 @@ class _S04SmartScanState extends State<S04SmartScan>
 
     if (kIsWeb) {
       _showMessage(
-        'OCR galeri tersedia pada aplikasi Android.',
+        'OCR galeri tersedia di Android.',
       );
       return;
     }
@@ -380,7 +544,9 @@ class _S04SmartScanState extends State<S04SmartScan>
 
       if (image == null || !mounted) return;
 
-      final text = await _recognizeImage(image.path);
+      final text = await _recognizeImage(
+        image.path,
+      );
 
       if (!mounted) return;
 
@@ -389,13 +555,17 @@ class _S04SmartScanState extends State<S04SmartScan>
           'Tidak ada teks ditemukan pada gambar.',
         );
       } else {
-        await Navigator.of(context).push<void>(
-          MaterialPageRoute(
-            builder: (_) => S05OcrReview(
-              initialText: text,
-            ),
+        final route = MaterialPageRoute<void>(
+          builder: (_) => S05OcrReview(
+            initialText: text,
           ),
         );
+
+        await Navigator.of(context).push<void>(
+          route,
+        );
+
+        await route.completed;
       }
     } catch (_) {
       _showMessage(
@@ -407,13 +577,14 @@ class _S04SmartScanState extends State<S04SmartScan>
           _busy = false;
           _suspended = false;
         });
+
         _syncCamera();
       }
     }
   }
 
   // ==========================================
-  // IMPOR DOKUMEN
+  // IMPORT DOKUMEN
   // ==========================================
 
   Future<void> _openImport() async {
@@ -428,30 +599,40 @@ class _S04SmartScanState extends State<S04SmartScan>
     if (!mounted) return;
 
     try {
-      await Navigator.of(context).push<void>(
-        MaterialPageRoute(
-          builder: (_) => const S06ImportDocument(),
-        ),
+      final route = MaterialPageRoute<void>(
+        builder: (_) => const S06ImportDocument(),
       );
+
+      await Navigator.of(context).push<void>(
+        route,
+      );
+
+      await route.completed;
     } finally {
       if (mounted) {
         setState(() {
           _suspended = false;
         });
+
         _syncCamera();
       }
     }
   }
 
   // ==========================================
-  // UI HALAMAN SCAN
+  // HALAMAN UTAMA
   // ==========================================
 
   @override
   Widget build(BuildContext context) {
     final screenHeight = MediaQuery.sizeOf(context).height;
 
-    final scanHeight = (screenHeight * 0.60).clamp(360.0, 600.0).toDouble();
+    final scanHeight = (screenHeight * 0.60)
+        .clamp(
+          360.0,
+          600.0,
+        )
+        .toDouble();
 
     return Scaffold(
       backgroundColor: background,
@@ -488,9 +669,8 @@ class _S04SmartScanState extends State<S04SmartScan>
               ),
             ),
 
-            // Navigasi bawah hanya ditampilkan
-            // oleh MainTabShell ketika berada
-            // dalam navigasi utama.
+            // NAVIGASI BAWAH TETAP DIAM
+            // DAN TIDAK MUNCUL DUA KALI.
             if (!MainTabShell.isEmbedded(context))
               BottomNav(
                 currentIndex: 1,
@@ -503,7 +683,7 @@ class _S04SmartScanState extends State<S04SmartScan>
   }
 
   // ==========================================
-  // PANEL SCANNER DENGAN LIVE PREVIEW
+  // PANEL SCANNER
   // ==========================================
 
   Widget _buildScanner(double height) {
@@ -517,12 +697,12 @@ class _S04SmartScanState extends State<S04SmartScan>
       ),
       child: Stack(
         children: [
-          // KAMERA REAL-TIME
+          // LIVE CAMERA
           Positioned.fill(
             child: _buildLivePreview(),
           ),
 
-          // Lapisan tipis agar ikon terlihat
+          // OVERLAY TRANSPARAN
           Positioned.fill(
             child: IgnorePointer(
               child: Container(
@@ -533,7 +713,7 @@ class _S04SmartScanState extends State<S04SmartScan>
             ),
           ),
 
-          // EMPAT GARIS SUDUT
+          // GARIS EMPAT SUDUT
           Positioned(
             top: height * 0.19,
             bottom: height * 0.18,
@@ -587,7 +767,7 @@ class _S04SmartScanState extends State<S04SmartScan>
   }
 
   // ==========================================
-  // TAMPILAN KAMERA LANGSUNG
+  // KAMERA REAL-TIME
   // ==========================================
 
   Widget _buildLivePreview() {
@@ -606,6 +786,8 @@ class _S04SmartScanState extends State<S04SmartScan>
           ),
         );
       }
+
+      return CameraPreview(controller);
     }
 
     if (kIsWeb) {
@@ -620,14 +802,20 @@ class _S04SmartScanState extends State<S04SmartScan>
       );
     }
 
+    // TOMBOL COBA LAGI
     if (_error != null && _shouldRunCamera) {
       return Center(
         child: TextButton.icon(
           onPressed: () {
-            setState(() => _error = null);
+            setState(() {
+              _error = null;
+            });
+
             _syncCamera();
           },
-          icon: const Icon(Icons.refresh_rounded),
+          icon: const Icon(
+            Icons.refresh_rounded,
+          ),
           label: const Text('Coba lagi'),
           style: TextButton.styleFrom(
             foregroundColor: Colors.white,
@@ -636,16 +824,21 @@ class _S04SmartScanState extends State<S04SmartScan>
       );
     }
 
-    return const Center(
-      child: CircularProgressIndicator(
-        color: Color(0xFF8095FF),
-        strokeWidth: 2.5,
-      ),
-    );
+    // LOADING KAMERA
+    if (_shouldRunCamera) {
+      return const Center(
+        child: CircularProgressIndicator(
+          color: Color(0xFF8095FF),
+          strokeWidth: 2.5,
+        ),
+      );
+    }
+
+    return const SizedBox.expand();
   }
 
   // ==========================================
-  // HEADER: BACK - JUDUL - PERBESAR
+  // HEADER SCAN
   // ==========================================
 
   Widget _buildScannerHeader() {
@@ -669,7 +862,7 @@ class _S04SmartScanState extends State<S04SmartScan>
           ),
         ),
 
-        // IKON INFO DIGANTI IKON PERBESAR
+        // IKON PERBESAR
         _headerIcon(
           icon: Icons.open_in_full_rounded,
           tooltip: 'Perbesar kamera',
@@ -724,10 +917,14 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
+  // ==========================================
+  // TOMBOL PINDAI
+  // ==========================================
+
   Widget _buildCameraButton() {
     return InkWell(
       borderRadius: BorderRadius.circular(60),
-      onTap: _busy ? null : _captureInline,
+      onTap: _busy || _suspended ? null : _captureInline,
       child: Column(
         children: [
           Container(
@@ -775,13 +972,17 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
+  // ==========================================
+  // TOMBOL SAMPING
+  // ==========================================
+
   Widget _sideAction({
     required IconData icon,
     required String label,
     required VoidCallback onTap,
   }) {
     return InkWell(
-      onTap: _busy ? null : onTap,
+      onTap: _busy || _suspended ? null : onTap,
       borderRadius: BorderRadius.circular(18),
       child: Column(
         children: [
@@ -815,24 +1016,31 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
+  // ==========================================
+  // MEMBERSIHKAN RESOURCE
+  // ==========================================
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
 
+    // Batalkan seluruh proses start lama.
     _cameraToken++;
 
-    // Jangan biarkan kamera tetap aktif
-    // setelah halaman dibuang.
+    // Tutup kamera jika masih aktif.
     final controller = _cameraController;
     _cameraController = null;
-    controller?.dispose();
+
+    if (controller != null) {
+      unawaited(controller.dispose());
+    }
 
     super.dispose();
   }
 }
 
 // ==========================================
-// GARIS EMPAT SUDUT SCANNER
+// GARIS SCANNER EMPAT SUDUT
 // ==========================================
 
 class _ScannerCornersPainter extends CustomPainter {
