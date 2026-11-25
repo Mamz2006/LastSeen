@@ -7,7 +7,7 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 
 // ==========================================
 // LASTSEEN - FULLSCREEN CAMERA
-// GLASS UI + SMOOTH PINCH ZOOM + SAFE EXIT
+// GLASS UI + SMOOTH PINCH ZOOM
 // ==========================================
 
 class S04BCameraCapture extends StatefulWidget {
@@ -26,7 +26,7 @@ enum _FrameCorner {
 
 class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   // ========================================
-  // WARNA APLIKASI
+  // WARNA
   // ========================================
 
   static const Color primary = Color(0xFF4361EE);
@@ -49,7 +49,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   String? _error;
 
   // ========================================
-  // PILIHAN BAHASA
+  // BAHASA
   // ========================================
 
   String _sourceLanguage = 'English';
@@ -66,12 +66,14 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   double _pinchStartZoom = 1.0;
   double? _pinchStartDistance;
 
-  // Posisi jari yang menyentuh layar.
   final Map<int, Offset> _touchPoints = {};
 
-  // Mencegah perintah zoom menumpuk.
-  bool _applyingZoom = false;
+  // Menyimpan permintaan zoom terbaru.
   double? _pendingZoom;
+
+  // Hanya satu proses pengiriman zoom
+  // ke kamera yang berjalan bersamaan.
+  Future<void>? _zoomTask;
 
   // ========================================
   // POSISI BINGKAI SCAN
@@ -83,7 +85,10 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   double _bottom = 0.69;
 
   bool get _ready =>
-      !_closing && _controller != null && _controller!.value.isInitialized;
+      mounted &&
+      !_closing &&
+      _controller != null &&
+      _controller!.value.isInitialized;
 
   // ========================================
   // INISIALISASI AWAL
@@ -92,7 +97,6 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   @override
   void initState() {
     super.initState();
-
     _initializationFuture = _initializeCamera();
   }
 
@@ -130,15 +134,14 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
         return;
       }
 
-      // Tampilkan preview segera setelah
-      // kamera berhasil diinisialisasi.
+      // Tampilkan kamera langsung setelah
+      // inisialisasi berhasil.
       setState(() {
         _controller = candidate;
         _error = null;
       });
 
-      // Ambil informasi zoom setelah preview
-      // ditampilkan agar loading lebih singkat.
+      // Siapkan zoom setelah preview tampil.
       try {
         final limits = await Future.wait<double>([
           candidate.getMinZoomLevel(),
@@ -151,7 +154,6 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
 
         final initialZoom = 1.0.clamp(limits[0], limits[1]).toDouble();
 
-        // Setup zoom hanya sekali.
         setState(() {
           _minZoom = limits[0];
           _maxZoom = limits[1];
@@ -162,7 +164,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
           await candidate.setZoomLevel(initialZoom);
         }
       } catch (_) {
-        // Kamera tetap berfungsi jika
+        // Kamera tetap berjalan meskipun
         // informasi zoom tidak tersedia.
       }
     } on CameraException catch (e) {
@@ -193,24 +195,44 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // MENDETEKSI JARI PADA LAYAR
+  // MENGHITUNG JARAK DUA JARI
+  // ========================================
+
+  double? _currentPinchDistance() {
+    if (_touchPoints.length != 2) return null;
+
+    final points = _touchPoints.values.toList();
+
+    return (points[0] - points[1]).distance;
+  }
+
+  void _resetPinchReference() {
+    final distance = _currentPinchDistance();
+
+    if (distance != null && distance > 0) {
+      _pinchStartDistance = distance;
+      _pinchStartZoom = _zoom;
+    } else {
+      _pinchStartDistance = null;
+    }
+  }
+
+  // ========================================
+  // JARI MENYENTUH LAYAR
   // ========================================
 
   void _onPointerDown(PointerDownEvent event) {
     _touchPoints[event.pointer] = event.localPosition;
 
-    // Ketika dua jari mulai menyentuh layar.
     if (_touchPoints.length == 2) {
-      final points = _touchPoints.values.toList();
-
-      _pinchStartDistance = (points[0] - points[1]).distance;
-
-      _pinchStartZoom = _zoom;
+      _resetPinchReference();
+    } else if (_touchPoints.length > 2) {
+      _pinchStartDistance = null;
     }
   }
 
   // ========================================
-  // MENDETEKSI GERAKAN DUA JARI
+  // GESTUR CUBIT DUA JARI
   // ========================================
 
   void _onPointerMove(PointerMoveEvent event) {
@@ -220,40 +242,48 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
 
     _touchPoints[event.pointer] = event.localPosition;
 
-    // Zoom hanya berjalan dengan dua jari.
-    if (_touchPoints.length != 2 ||
-        _pinchStartDistance == null ||
-        _pinchStartDistance! <= 0 ||
-        !_ready ||
-        _busy) {
+    if (!_ready || _busy) return;
+
+    // Hanya menerima tepat dua jari.
+    if (_touchPoints.length != 2) return;
+
+    final startDistance = _pinchStartDistance;
+    final currentDistance = _currentPinchDistance();
+
+    if (startDistance == null ||
+        currentDistance == null ||
+        startDistance <= 0) {
       return;
     }
 
-    final points = _touchPoints.values.toList();
+    // Perubahan zoom mengikuti perbandingan
+    // jarak dua jari, tanpa jeda tambahan.
+    final scale = currentDistance / startDistance;
 
-    final currentDistance = (points[0] - points[1]).distance;
+    final nextZoom = _pinchStartZoom * scale;
 
-    final scale = currentDistance / _pinchStartDistance!;
-
-    // Hitung zoom berdasarkan jarak dua jari.
-    _changeZoom(_pinchStartZoom * scale);
+    _changeZoom(nextZoom);
   }
 
   // ========================================
-  // KETIKA JARI DIANGKAT
+  // JARI DIANGKAT
   // ========================================
 
   void _onPointerUp(PointerEvent event) {
     _touchPoints.remove(event.pointer);
 
-    if (_touchPoints.length < 2) {
+    // Jika masih ada tepat dua jari,
+    // gunakan posisi saat ini sebagai
+    // awal gestur yang baru.
+    if (_touchPoints.length == 2) {
+      _resetPinchReference();
+    } else {
       _pinchStartDistance = null;
     }
   }
 
   // ========================================
-  // PERBAIKAN ZOOM LEBIH HALUS
-  // TANPA SETSTATE BERULANG
+  // MENGUBAH ZOOM TANPA MEMBANGUN ULANG UI
   // ========================================
 
   void _changeZoom(double value) {
@@ -263,72 +293,81 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
 
     final next = value.clamp(_minZoom, _maxZoom).toDouble();
 
-    // Abaikan perubahan yang terlalu kecil
-    // untuk mengurangi perintah ke kamera.
-    if ((next - _zoom).abs() < 0.02) {
+    // Abaikan hanya perbedaan sangat kecil
+    // akibat perhitungan angka desimal.
+    if ((next - _zoom).abs() < 0.001) {
       return;
     }
 
-    // Tidak menggunakan setState().
-    // CameraPreview tidak perlu dibangun ulang
-    // setiap kali jari bergerak.
+    // Tidak perlu setState karena angka
+    // zoom tidak ditampilkan di layar.
     _zoom = next;
 
-    // Hanya simpan nilai zoom terbaru.
+    // Permintaan lama diganti oleh nilai baru.
     _pendingZoom = next;
 
-    if (!_applyingZoom) {
-      unawaited(_applyZoom());
-    }
+    // Langsung proses tanpa delay 35 ms.
+    _startZoomWorker();
   }
 
   // ========================================
-  // ANTREAN PERINTAH ZOOM
+  // MEMULAI PENGIRIMAN ZOOM
   // ========================================
 
-  Future<void> _applyZoom() async {
-    if (_applyingZoom) return;
+  void _startZoomWorker() {
+    if (_zoomTask != null || _closing) return;
 
-    _applyingZoom = true;
+    final task = _applyPendingZoom();
+    _zoomTask = task;
 
-    try {
-      while (_pendingZoom != null && !_closing) {
-        final next = _pendingZoom!;
+    unawaited(
+      task.whenComplete(() {
+        if (identical(_zoomTask, task)) {
+          _zoomTask = null;
+        }
 
-        // Hapus permintaan lama.
-        // Permintaan berikutnya dapat
-        // menggantikannya dengan nilai terbaru.
+        // Jika masih ada perubahan terbaru,
+        // lanjutkan tanpa jeda tambahan.
+        if (_pendingZoom != null && !_closing) {
+          _startZoomWorker();
+        }
+      }),
+    );
+  }
+
+  // ========================================
+  // PENGIRIMAN ZOOM KE KAMERA
+  // ========================================
+
+  Future<void> _applyPendingZoom() async {
+    while (!_closing) {
+      final next = _pendingZoom;
+
+      if (next == null) break;
+
+      // Ambil nilai paling baru.
+      _pendingZoom = null;
+
+      final controller = _controller;
+
+      if (controller == null || !controller.value.isInitialized) {
+        break;
+      }
+
+      try {
+        await controller.setZoomLevel(next);
+      } catch (_) {
+        // Jangan terus mengirim zoom
+        // jika kamera sudah tidak siap.
         _pendingZoom = null;
-
-        final controller = _controller;
-
-        if (controller == null || !controller.value.isInitialized) {
-          break;
-        }
-
-        try {
-          await controller.setZoomLevel(next);
-        } catch (_) {
-          break;
-        }
-
-        // Sedikit membatasi frekuensi perintah
-        // agar sistem kamera tidak kewalahan.
-        // Ini bukan delay perpindahan halaman.
-        if (_pendingZoom != null) {
-          await Future<void>.delayed(
-            const Duration(milliseconds: 35),
-          );
-        }
+        break;
       }
-    } finally {
-      _applyingZoom = false;
 
-      // Jalankan lagi jika ada nilai zoom
-      // terbaru yang belum diterapkan.
-      if (_pendingZoom != null && !_closing && _ready) {
-        unawaited(_applyZoom());
-      }
+      // Jika pengguna masih menggerakkan
+      // jari, loop langsung memproses
+      // nilai paling baru berikutnya.
+      //
+      // Tidak ada Future.delayed(35 ms).
     }
   }
 
@@ -340,16 +379,13 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
     if (_busy || _closing) return;
 
     setState(() {
-      final previous = _sourceLanguage;
+      final old = _sourceLanguage;
       _sourceLanguage = _targetLanguage;
-      _targetLanguage = previous;
+      _targetLanguage = old;
     });
   }
 
-  void _changeLanguage(
-    String source,
-    String target,
-  ) {
+  void _changeLanguage(String source, String target) {
     if (_busy || _closing) return;
 
     setState(() {
@@ -424,7 +460,6 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                       'English',
                       'Indonesia',
                     );
-
                     Navigator.pop(sheetContext);
                   },
                 ),
@@ -437,7 +472,6 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                       'Indonesia',
                       'English',
                     );
-
                     Navigator.pop(sheetContext);
                   },
                 ),
@@ -448,10 +482,6 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
       },
     );
   }
-
-  // ========================================
-  // PILIHAN BAHASA PADA MODAL
-  // ========================================
 
   Widget _languageOption({
     required String title,
@@ -501,7 +531,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // PILIHAN BAHASA BERGAYA GLASS
+  // PEMILIH BAHASA GLASS
   // ========================================
 
   Widget _buildGlassLanguagePicker() {
@@ -515,14 +545,10 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
         child: Container(
           height: 49,
           decoration: BoxDecoration(
-            color: glassColor.withValues(
-              alpha: 0.43,
-            ),
+            color: glassColor.withValues(alpha: 0.43),
             borderRadius: BorderRadius.circular(28),
             border: Border.all(
-              color: Colors.white.withValues(
-                alpha: 0.28,
-              ),
+              color: Colors.white.withValues(alpha: 0.28),
             ),
           ),
           child: Row(
@@ -534,9 +560,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                     onTap: _showLanguagePicker,
                     child: Center(
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: FittedBox(
                           fit: BoxFit.scaleDown,
                           child: Text(
@@ -554,8 +578,6 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                   ),
                 ),
               ),
-
-              // Tombol tukar tanpa garis pemisah.
               IconButton(
                 tooltip: 'Tukar bahasa',
                 onPressed: _busy || _closing ? null : _swapLanguage,
@@ -578,7 +600,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // TOMBOL BULAT BERGAYA GLASS
+  // TOMBOL BULAT GLASS
   // ========================================
 
   Widget _glassCircleButton({
@@ -603,9 +625,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                 width: 49,
                 height: 49,
                 decoration: BoxDecoration(
-                  color: glassColor.withValues(
-                    alpha: 0.43,
-                  ),
+                  color: glassColor.withValues(alpha: 0.43),
                   shape: BoxShape.circle,
                   border: Border.all(
                     color: Colors.white.withValues(
@@ -628,14 +648,9 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
     );
   }
 
-  // ========================================
-  // HEADER KAMERA FULLSCREEN
-  // ========================================
-
   Widget _buildHeader() {
     return Row(
       children: [
-        // Tombol kembali.
         _glassCircleButton(
           icon: Icons.arrow_back_rounded,
           tooltip: 'Kembali',
@@ -645,21 +660,15 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                   unawaited(_close(null));
                 },
         ),
-
         const SizedBox(width: 9),
-
-        // Pemilih bahasa.
         Expanded(
           child: _buildGlassLanguagePicker(),
         ),
-
         const SizedBox(width: 9),
-
-        // Tombol flash.
         _glassCircleButton(
           icon: _flashOn ? Icons.flash_on_rounded : Icons.flash_off_rounded,
           tooltip: _flashOn ? 'Matikan flash' : 'Nyalakan flash',
-          onTap: _ready && !_busy && !_changingFlash && !_closing
+          onTap: _ready && !_busy && !_changingFlash
               ? () {
                   unawaited(_toggleFlash());
                 }
@@ -670,7 +679,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // FLASH ON / OFF
+  // FLASH
   // ========================================
 
   Future<void> _toggleFlash() async {
@@ -684,9 +693,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
       return;
     }
 
-    setState(() {
-      _changingFlash = true;
-    });
+    setState(() => _changingFlash = true);
 
     try {
       final turnOn = !_flashOn;
@@ -724,15 +731,13 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   // ========================================
 
   Future<void> _releaseCamera() async {
-    final controller = _controller;
-
-    // Hentikan semua proses zoom.
     _pendingZoom = null;
     _touchPoints.clear();
     _pinchStartDistance = null;
 
-    // Hilangkan preview sebelum
-    // melepaskan CameraController.
+    // Hilangkan preview sebelum kamera dilepas.
+    final controller = _controller;
+
     if (mounted) {
       setState(() {
         _controller = null;
@@ -743,26 +748,33 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
       _controller = null;
     }
 
-    // Lepaskan resource native.
-    if (controller != null) {
-      try {
-        await controller.setFlashMode(
-          FlashMode.off,
-        );
-      } catch (_) {}
-
-      try {
-        await controller.dispose();
-      } catch (_) {}
-    }
-
-    // Pastikan proses pembukaan kamera
-    // sebelumnya sudah selesai.
+    // Tunggu inisialisasi yang mungkin
+    // masih berjalan.
     final initialization = _initializationFuture;
 
     if (initialization != null) {
       try {
         await initialization;
+      } catch (_) {}
+    }
+
+    // Tunggu perintah zoom yang sedang dikirim
+    // sebelum CameraController di-dispose.
+    final zoomTask = _zoomTask;
+
+    if (zoomTask != null) {
+      try {
+        await zoomTask;
+      } catch (_) {}
+    }
+
+    if (controller != null) {
+      try {
+        await controller.setFlashMode(FlashMode.off);
+      } catch (_) {}
+
+      try {
+        await controller.dispose();
       } catch (_) {}
     }
   }
@@ -914,10 +926,6 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
     });
   }
 
-  // ========================================
-  // AREA SENTUH SUDUT
-  // ========================================
-
   Widget _cornerHandle({
     required Offset position,
     required Size screenSize,
@@ -944,7 +952,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // BINGKAI SCAN YANG BISA DIGESER
+  // BINGKAI SCAN
   // ========================================
 
   Widget _buildAdjustableFrame() {
@@ -1038,7 +1046,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // CAMERA PREVIEW
+  // PREVIEW KAMERA
   // ========================================
 
   Widget _buildPreview() {
@@ -1140,8 +1148,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // HALAMAN KAMERA FULLSCREEN
-  // TANPA SLIDER ZOOM
+  // HALAMAN FULLSCREEN TANPA SLIDER
   // ========================================
 
   @override
@@ -1157,13 +1164,10 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
         backgroundColor: navy,
         body: Listener(
           behavior: HitTestBehavior.translucent,
-
-          // Mendeteksi gestur dua jari.
           onPointerDown: _onPointerDown,
           onPointerMove: _onPointerMove,
           onPointerUp: _onPointerUp,
           onPointerCancel: _onPointerUp,
-
           child: Stack(
             children: [
               // PREVIEW KAMERA
@@ -1171,7 +1175,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                 child: _buildPreview(),
               ),
 
-              // BINGKAI SCAN
+              // BINGKAI YANG BISA DIGESER
               if (_ready) _buildAdjustableFrame(),
 
               // HEADER DAN TOMBOL PINDAI
@@ -1186,9 +1190,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                   child: Column(
                     children: [
                       _buildHeader(),
-
                       const Spacer(),
-
                       if (_error != null) ...[
                         Container(
                           width: double.infinity,
@@ -1208,9 +1210,6 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                         ),
                         const SizedBox(height: 18),
                       ],
-
-                      // Slider zoom sudah dihapus.
-                      // Zoom menggunakan dua jari.
                       _buildCaptureButton(),
                     ],
                   ),
@@ -1224,7 +1223,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // MEMBERSIHKAN RESOURCE
+  // MEMBERSIHKAN CAMERA CONTROLLER
   // ========================================
 
   @override
@@ -1265,25 +1264,18 @@ class _CameraCornersPainter extends CustomPainter {
     final h = size.height;
 
     final path = Path()
-      // KIRI ATAS
       ..moveTo(0, length)
       ..lineTo(0, radius)
       ..quadraticBezierTo(0, 0, radius, 0)
       ..lineTo(length, 0)
-
-      // KANAN ATAS
       ..moveTo(w - length, 0)
       ..lineTo(w - radius, 0)
       ..quadraticBezierTo(w, 0, w, radius)
       ..lineTo(w, length)
-
-      // KIRI BAWAH
       ..moveTo(0, h - length)
       ..lineTo(0, h - radius)
       ..quadraticBezierTo(0, h, radius, h)
       ..lineTo(length, h)
-
-      // KANAN BAWAH
       ..moveTo(w - length, h)
       ..lineTo(w - radius, h)
       ..quadraticBezierTo(w, h, w, h - radius)
