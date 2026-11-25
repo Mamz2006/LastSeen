@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
@@ -11,11 +12,6 @@ import '../widgets/bottom_nav.dart';
 import 's04b_camera_capture.dart';
 import 's05_ocr_review.dart';
 import 's06_import_document.dart';
-
-// ==========================================
-// SMART SCAN LASTSEEN
-// LIVE CAMERA + FULLSCREEN + OCR
-// ==========================================
 
 class S04SmartScan extends StatefulWidget {
   const S04SmartScan({super.key});
@@ -32,37 +28,283 @@ class _S04SmartScanState extends State<S04SmartScan>
   static const Color background = Color(0xFFF8F9FD);
   static const Color border = Color(0xFFDDE3F0);
 
-  CameraController? _cameraController;
+  CameraController? _camera;
+  Future<void>? _starting;
+  Future<void>? _stopping;
 
-  Future<void>? _startingCamera;
-  Future<void>? _stoppingCamera;
+  final ImagePicker _picker = ImagePicker();
 
-  final ImagePicker _imagePicker = ImagePicker();
-
-  int _cameraToken = 0;
+  int _cameraVersion = 0;
 
   bool _tabVisible = false;
   bool _appVisible = true;
   bool _suspended = false;
   bool _busy = false;
+  bool _disposing = false;
 
   String? _error;
 
-  bool get _shouldRunCamera =>
-      !kIsWeb && mounted && _tabVisible && _appVisible && !_suspended;
+  // ==========================================
+  // PILIHAN BAHASA KHUSUS REAL-TIME
+  // ==========================================
 
-  bool _isCurrentCamera(int token) {
-    return _shouldRunCamera && token == _cameraToken;
+  String _sourceLanguage = 'English';
+  String _targetLanguage = 'Indonesia';
+
+  void _swapLanguage() {
+    setState(() {
+      final previous = _sourceLanguage;
+      _sourceLanguage = _targetLanguage;
+      _targetLanguage = previous;
+    });
+  }
+
+  void _changeLanguage({
+    required String source,
+    required String target,
+  }) {
+    setState(() {
+      _sourceLanguage = source;
+      _targetLanguage = target;
+    });
   }
 
   // ==========================================
-  // LIFECYCLE
+  // PILIH BAHASA MELALUI BOTTOM SHEET
   // ==========================================
+
+  void _showLanguagePicker() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return SafeArea(
+          top: false,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(
+              22,
+              14,
+              22,
+              28,
+            ),
+            decoration: const BoxDecoration(
+              color: Color(0xFF191E32),
+              borderRadius: BorderRadius.vertical(
+                top: Radius.circular(28),
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.white30,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                const Text(
+                  'Pilih bahasa pemindaian',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 21,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Tentukan arah bahasa yang ingin digunakan.',
+                  style: TextStyle(
+                    color: Color(0xFFA6AEC8),
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                _languageOption(
+                  title: 'English → Indonesia',
+                  selected: _sourceLanguage == 'English',
+                  onTap: () {
+                    _changeLanguage(
+                      source: 'English',
+                      target: 'Indonesia',
+                    );
+                    Navigator.pop(sheetContext);
+                  },
+                ),
+                const SizedBox(height: 12),
+                _languageOption(
+                  title: 'Indonesia → English',
+                  selected: _sourceLanguage == 'Indonesia',
+                  onTap: () {
+                    _changeLanguage(
+                      source: 'Indonesia',
+                      target: 'English',
+                    );
+                    Navigator.pop(sheetContext);
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _languageOption({
+    required String title,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color:
+          selected ? primary.withValues(alpha: 0.24) : const Color(0xFF2B3045),
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: 17,
+            vertical: 17,
+          ),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: selected ? const Color(0xFF8FA0FF) : Colors.white12,
+            ),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (selected)
+                const Icon(
+                  Icons.check_circle_rounded,
+                  color: Color(0xFF91A1FF),
+                  size: 23,
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ==========================================
+  // GLASS LANGUAGE PICKER
+  // ==========================================
+
+  Widget _buildGlassLanguagePicker() {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(28),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(
+          sigmaX: 15,
+          sigmaY: 15,
+        ),
+        child: Container(
+          height: 49,
+          decoration: BoxDecoration(
+            color: const Color(0xFF444A60).withValues(alpha: 0.43),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(
+              color: Colors.white.withValues(
+                alpha: 0.28,
+              ),
+              width: 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              // NAMA BAHASA
+              Expanded(
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _showLanguagePicker,
+                    child: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 9,
+                        ),
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            '$_sourceLanguage  →  $_targetLanguage',
+                            maxLines: 1,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              // PEMBATAS TIPIS
+              Container(
+                width: 1,
+                height: 24,
+                color: Colors.white24,
+              ),
+
+              // TOMBOL TUKAR BAHASA
+              IconButton(
+                tooltip: 'Tukar bahasa',
+                onPressed: _swapLanguage,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(
+                  minWidth: 42,
+                  minHeight: 42,
+                ),
+                icon: const Icon(
+                  Icons.swap_horiz_rounded,
+                  color: Colors.white,
+                  size: 23,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ==========================================
+  // PENGELOLAAN KAMERA
+  // ==========================================
+
+  bool get _shouldRun =>
+      mounted &&
+      !_disposing &&
+      !kIsWeb &&
+      _tabVisible &&
+      _appVisible &&
+      !_suspended;
+
+  bool _isCurrent(int version) => _shouldRun && _cameraVersion == version;
 
   @override
   void initState() {
     super.initState();
-
     WidgetsBinding.instance.addObserver(this);
   }
 
@@ -70,8 +312,6 @@ class _S04SmartScanState extends State<S04SmartScan>
   void didChangeDependencies() {
     super.didChangeDependencies();
 
-    // MainTabShell menggunakan TickerMode.
-    // Kamera hanya aktif pada tab Scan.
     final visible = TickerMode.of(context);
 
     if (_tabVisible != visible) {
@@ -96,213 +336,164 @@ class _S04SmartScanState extends State<S04SmartScan>
     _syncCamera();
   }
 
-  // ==========================================
-  // SINKRONISASI STATUS KAMERA
-  // ==========================================
-
   void _syncCamera() {
-    if (!mounted || kIsWeb) return;
+    if (!mounted || _disposing || kIsWeb) return;
 
-    if (!_shouldRunCamera) {
-      if (_cameraController != null || _startingCamera != null) {
+    if (!_shouldRun) {
+      if (_camera != null || _starting != null) {
         unawaited(_stopCamera());
       }
       return;
     }
 
-    // Jangan buka kamera baru ketika
-    // kamera sebelumnya masih dilepas.
-    if (_stoppingCamera != null) return;
-
-    // Jangan membuat dua controller.
-    if (_cameraController != null || _startingCamera != null) {
+    if (_camera != null || _starting != null || _stopping != null) {
       return;
     }
 
-    unawaited(_startCamera());
+    final version = ++_cameraVersion;
+    final task = _initializeCamera(version);
+
+    _starting = task;
+
+    unawaited(
+      task.whenComplete(() {
+        if (identical(_starting, task)) {
+          _starting = null;
+        }
+      }),
+    );
   }
 
   // ==========================================
-  // MEMULAI KAMERA REAL-TIME
+  // INISIALISASI KAMERA
   // ==========================================
 
-  Future<void> _startCamera() async {
-    if (!_shouldRunCamera ||
-        _cameraController != null ||
-        _startingCamera != null ||
-        _stoppingCamera != null) {
-      return;
-    }
-
-    final token = ++_cameraToken;
-
-    final request = _initializeCamera(token);
-    _startingCamera = request;
-
-    try {
-      await request;
-    } finally {
-      if (identical(_startingCamera, request)) {
-        _startingCamera = null;
-      }
-    }
-  }
-
-  // ==========================================
-  // INISIALISASI + RETRY
-  // ==========================================
-
-  Future<void> _initializeCamera(int token) async {
+  Future<void> _initializeCamera(int version) async {
     try {
       final cameras = await availableCameras();
 
-      if (!_isCurrentCamera(token)) {
-        return;
-      }
+      if (!_isCurrent(version)) return;
 
       if (cameras.isEmpty) {
-        throw StateError(
-          'Tidak ada kamera pada perangkat.',
-        );
+        throw StateError('Kamera tidak ditemukan.');
       }
 
-      final backCamera = cameras.firstWhere(
+      final rearCamera = cameras.firstWhere(
         (camera) => camera.lensDirection == CameraLensDirection.back,
         orElse: () => cameras.first,
       );
 
-      // Coba maksimal tiga kali.
-      // Berguna saat kamera fullscreen
-      // baru saja ditutup.
       for (int attempt = 0; attempt < 3; attempt++) {
-        if (!_isCurrentCamera(token)) {
-          return;
-        }
+        if (!_isCurrent(version)) return;
 
-        CameraController? created;
+        CameraController? candidate;
 
         try {
-          created = CameraController(
-            backCamera,
+          candidate = CameraController(
+            rearCamera,
             ResolutionPreset.high,
             enableAudio: false,
           );
 
-          await created.initialize();
+          await candidate.initialize();
 
-          // Jika pengguna sudah pindah tab
-          // atau membuka fullscreen,
-          // controller ini tidak boleh dipakai.
-          if (!_isCurrentCamera(token)) {
-            await created.dispose();
+          if (!_isCurrent(version)) {
+            await candidate.dispose();
             return;
           }
 
           setState(() {
-            _cameraController = created;
+            _camera = candidate;
             _error = null;
           });
 
           return;
         } catch (_) {
-          if (created != null) {
+          if (candidate != null) {
             try {
-              await created.dispose();
+              await candidate.dispose();
             } catch (_) {}
           }
 
-          if (!_isCurrentCamera(token)) {
-            return;
-          }
+          if (!_isCurrent(version)) return;
 
           if (attempt < 2) {
-            // Tunggu kamera Android siap lagi.
             await Future<void>.delayed(
               Duration(
-                milliseconds: 400 + attempt * 250,
+                milliseconds: 400 + attempt * 300,
               ),
             );
-          } else {
-            if (mounted) {
-              setState(() {
-                _error = 'Kamera gagal dibuka. '
-                    'Tekan Coba lagi.';
-              });
-            }
           }
         }
       }
-    } catch (_) {
-      if (_isCurrentCamera(token)) {
+
+      if (_isCurrent(version)) {
         setState(() {
-          _error = 'Tidak dapat mengakses kamera. '
-              'Periksa izin kamera.';
+          _error = 'Kamera belum tersedia. Tekan Coba lagi.';
+        });
+      }
+    } catch (_) {
+      if (_isCurrent(version)) {
+        setState(() {
+          _error = 'Tidak dapat membuka kamera. Periksa izin kamera.';
         });
       }
     }
   }
 
   // ==========================================
-  // MENGHENTIKAN KAMERA DENGAN AMAN
+  // MELEPAS KAMERA
   // ==========================================
 
   Future<void> _stopCamera() async {
-    // Batalkan semua inisialisasi lama.
-    _cameraToken++;
+    _cameraVersion++;
 
-    // Jika sedang ada proses stop,
-    // tunggu proses itu selesai.
-    final ongoingStop = _stoppingCamera;
+    final ongoingStop = _stopping;
 
     if (ongoingStop != null) {
       await ongoingStop;
       return;
     }
 
-    final request = _releaseCamera();
-    _stoppingCamera = request;
+    final task = _releaseCamera();
+    _stopping = task;
 
     try {
-      await request;
+      await task;
     } finally {
-      if (identical(_stoppingCamera, request)) {
-        _stoppingCamera = null;
+      if (identical(_stopping, task)) {
+        _stopping = null;
       }
 
-      // Jika tab kembali aktif selama
-      // kamera lama sedang dilepas,
-      // hidupkan kamera setelah aman.
-      if (mounted && _shouldRunCamera) {
+      if (_shouldRun) {
         _syncCamera();
       }
     }
   }
 
-  // ==========================================
-  // MELEPAS RESOURCE KAMERA
-  // ==========================================
-
   Future<void> _releaseCamera() async {
-    // Tunggu inisialisasi sebelumnya
-    // berhenti dan membuang controllernya.
-    final starting = _startingCamera;
+    final starting = _starting;
 
     if (starting != null) {
       try {
         await starting;
       } catch (_) {}
+
+      if (identical(_starting, starting)) {
+        _starting = null;
+      }
     }
 
-    final oldController = _cameraController;
-    _cameraController = null;
+    final oldCamera = _camera;
+    _camera = null;
 
-    if (oldController != null) {
-      if (mounted) {
+    if (oldCamera != null) {
+      if (mounted && !_disposing) {
         setState(() {});
       }
 
       try {
-        await oldController.dispose();
+        await oldCamera.dispose();
       } catch (_) {}
     }
   }
@@ -325,15 +516,15 @@ class _S04SmartScanState extends State<S04SmartScan>
   // OCR
   // ==========================================
 
-  Future<String> _recognizeImage(String path) async {
+  Future<String> _readText(String path) async {
     final recognizer = TextRecognizer(
       script: TextRecognitionScript.latin,
     );
 
     try {
-      final image = InputImage.fromFilePath(path);
-
-      final result = await recognizer.processImage(image);
+      final result = await recognizer.processImage(
+        InputImage.fromFilePath(path),
+      );
 
       return result.text.trim();
     } finally {
@@ -345,8 +536,8 @@ class _S04SmartScanState extends State<S04SmartScan>
   // HALAMAN HASIL OCR
   // ==========================================
 
-  Future<void> _openOcrResult(String text) async {
-    if (!mounted || text.trim().isEmpty) return;
+  Future<void> _showResult(String text) async {
+    if (!mounted || text.isEmpty) return;
 
     setState(() {
       _suspended = true;
@@ -367,7 +558,6 @@ class _S04SmartScanState extends State<S04SmartScan>
         route,
       );
 
-      // Tunggu animasi penutupan halaman OCR.
       await route.completed;
     } finally {
       if (mounted) {
@@ -381,15 +571,15 @@ class _S04SmartScanState extends State<S04SmartScan>
   }
 
   // ==========================================
-  // PINDAI LANGSUNG
+  // PINDAI DARI KAMERA REAL-TIME
   // ==========================================
 
   Future<void> _captureInline() async {
     if (_busy || _suspended) return;
 
-    final controller = _cameraController;
+    final camera = _camera;
 
-    if (controller == null || !controller.value.isInitialized) {
+    if (camera == null || !camera.value.isInitialized) {
       _showMessage(
         'Kamera sedang disiapkan.',
       );
@@ -402,25 +592,22 @@ class _S04SmartScanState extends State<S04SmartScan>
     });
 
     try {
-      final photo = await controller.takePicture();
+      final picture = await camera.takePicture();
 
-      final text = await _recognizeImage(
-        photo.path,
-      );
+      final text = await _readText(picture.path);
 
       if (!mounted) return;
 
       if (text.isEmpty) {
         _showMessage(
-          'Tidak ada teks terdeteksi. '
-          'Coba arahkan kamera lebih dekat.',
+          'Teks tidak terdeteksi. Coba lebih dekat.',
         );
       } else {
-        await _openOcrResult(text);
+        await _showResult(text);
       }
     } catch (_) {
       _showMessage(
-        'Gagal memindai gambar. Coba lagi.',
+        'Gagal memindai. Coba lagi.',
       );
     } finally {
       if (mounted) {
@@ -432,8 +619,7 @@ class _S04SmartScanState extends State<S04SmartScan>
   }
 
   // ==========================================
-  // MODE KAMERA PENUH
-  // PERBAIKAN KAMERA TIDAK KEMBALI
+  // BUKA MODE KAMERA FULLSCREEN
   // ==========================================
 
   Future<void> _openFullCamera() async {
@@ -451,33 +637,29 @@ class _S04SmartScanState extends State<S04SmartScan>
       _error = null;
     });
 
-    // 1. Lepaskan kamera kecil sepenuhnya.
     await _stopCamera();
 
     if (!mounted) return;
 
-    final cameraRoute = MaterialPageRoute<String>(
+    final route = MaterialPageRoute<String>(
       builder: (_) => const S04BCameraCapture(),
     );
 
     try {
-      // 2. Buka kamera mode penuh.
-      final scannedText = await Navigator.of(context).push<String>(
-        cameraRoute,
+      final text = await Navigator.of(context).push<String>(
+        route,
       );
 
-      // 3. Tunggu hingga route kamera
-      // selesai ditutup, termasuk animasinya.
-      await cameraRoute.completed;
+      // Tunggu kamera fullscreen benar-benar
+      // selesai ditutup.
+      await route.completed;
 
       if (!mounted) return;
 
-      // 4. Jika OCR berhasil,
-      // tampilkan hasil pemindaian.
-      if (scannedText != null && scannedText.trim().isNotEmpty) {
+      if (text != null && text.trim().isNotEmpty) {
         final resultRoute = MaterialPageRoute<void>(
           builder: (_) => S05OcrReview(
-            initialText: scannedText,
+            initialText: text,
           ),
         );
 
@@ -489,11 +671,9 @@ class _S04SmartScanState extends State<S04SmartScan>
       }
     } catch (_) {
       _showMessage(
-        'Mode kamera penuh gagal dibuka.',
+        'Mode kamera gagal dibuka.',
       );
     } finally {
-      // 5. Beri kesempatan kamera native
-      // menyelesaikan pelepasan resource.
       await Future<void>.delayed(
         const Duration(milliseconds: 350),
       );
@@ -504,11 +684,7 @@ class _S04SmartScanState extends State<S04SmartScan>
           _error = null;
         });
 
-        // 6. Periksa kembali apakah tab Scan
-        // masih terlihat.
         _tabVisible = TickerMode.of(context);
-
-        // 7. Nyalakan kamera kecil kembali.
         _syncCamera();
       }
     }
@@ -523,7 +699,7 @@ class _S04SmartScanState extends State<S04SmartScan>
 
     if (kIsWeb) {
       _showMessage(
-        'OCR galeri tersedia di Android.',
+        'Gunakan Android untuk OCR galeri.',
       );
       return;
     }
@@ -538,21 +714,19 @@ class _S04SmartScanState extends State<S04SmartScan>
     if (!mounted) return;
 
     try {
-      final image = await _imagePicker.pickImage(
+      final image = await _picker.pickImage(
         source: ImageSource.gallery,
       );
 
       if (image == null || !mounted) return;
 
-      final text = await _recognizeImage(
-        image.path,
-      );
+      final text = await _readText(image.path);
 
       if (!mounted) return;
 
       if (text.isEmpty) {
         _showMessage(
-          'Tidak ada teks ditemukan pada gambar.',
+          'Tidak ada teks pada gambar.',
         );
       } else {
         final route = MaterialPageRoute<void>(
@@ -569,7 +743,7 @@ class _S04SmartScanState extends State<S04SmartScan>
       }
     } catch (_) {
       _showMessage(
-        'Gagal membaca gambar dari galeri.',
+        'Gagal membaca gambar.',
       );
     } finally {
       if (mounted) {
@@ -584,7 +758,7 @@ class _S04SmartScanState extends State<S04SmartScan>
   }
 
   // ==========================================
-  // IMPORT DOKUMEN
+  // IMPOR DOKUMEN
   // ==========================================
 
   Future<void> _openImport() async {
@@ -620,7 +794,7 @@ class _S04SmartScanState extends State<S04SmartScan>
   }
 
   // ==========================================
-  // HALAMAN UTAMA
+  // HALAMAN SCAN UTAMA
   // ==========================================
 
   @override
@@ -669,8 +843,7 @@ class _S04SmartScanState extends State<S04SmartScan>
               ),
             ),
 
-            // NAVIGASI BAWAH TETAP DIAM
-            // DAN TIDAK MUNCUL DUA KALI.
+            // Bottom navigation tidak ganda.
             if (!MainTabShell.isEmbedded(context))
               BottomNav(
                 currentIndex: 1,
@@ -697,23 +870,21 @@ class _S04SmartScanState extends State<S04SmartScan>
       ),
       child: Stack(
         children: [
-          // LIVE CAMERA
+          // PREVIEW REAL-TIME
           Positioned.fill(
             child: _buildLivePreview(),
           ),
 
-          // OVERLAY TRANSPARAN
-          Positioned.fill(
+          // OVERLAY TIPIS
+          const Positioned.fill(
             child: IgnorePointer(
-              child: Container(
-                color: Colors.black.withValues(
-                  alpha: 0.10,
-                ),
+              child: ColoredBox(
+                color: Color(0x18000000),
               ),
             ),
           ),
 
-          // GARIS EMPAT SUDUT
+          // GARIS PEMINDAI
           Positioned(
             top: height * 0.19,
             bottom: height * 0.18,
@@ -721,12 +892,12 @@ class _S04SmartScanState extends State<S04SmartScan>
             right: 34,
             child: IgnorePointer(
               child: CustomPaint(
-                painter: _ScannerCornersPainter(),
+                painter: _ScanCornersPainter(),
               ),
             ),
           ),
 
-          // HEADER
+          // HEADER BARU
           Positioned(
             top: 17,
             left: 17,
@@ -767,50 +938,47 @@ class _S04SmartScanState extends State<S04SmartScan>
   }
 
   // ==========================================
-  // KAMERA REAL-TIME
+  // LIVE CAMERA PREVIEW
   // ==========================================
 
   Widget _buildLivePreview() {
-    final controller = _cameraController;
+    final controller = _camera;
 
     if (controller != null && controller.value.isInitialized) {
-      final previewSize = controller.value.previewSize;
+      final size = controller.value.previewSize;
 
-      if (previewSize != null) {
-        return FittedBox(
-          fit: BoxFit.cover,
-          child: SizedBox(
-            width: previewSize.height,
-            height: previewSize.width,
-            child: CameraPreview(controller),
-          ),
-        );
+      if (size == null) {
+        return CameraPreview(controller);
       }
 
-      return CameraPreview(controller);
+      return FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: size.height,
+          height: size.width,
+          child: CameraPreview(controller),
+        ),
+      );
     }
 
     if (kIsWeb) {
       return const Center(
         child: Text(
-          'Preview kamera tersedia di Android',
+          'Kamera tersedia pada Android',
           style: TextStyle(
             color: Colors.white70,
-            fontSize: 13,
           ),
         ),
       );
     }
 
-    // TOMBOL COBA LAGI
-    if (_error != null && _shouldRunCamera) {
+    if (_error != null && _shouldRun) {
       return Center(
         child: TextButton.icon(
           onPressed: () {
             setState(() {
               _error = null;
             });
-
             _syncCamera();
           },
           icon: const Icon(
@@ -824,12 +992,10 @@ class _S04SmartScanState extends State<S04SmartScan>
       );
     }
 
-    // LOADING KAMERA
-    if (_shouldRunCamera) {
+    if (_shouldRun) {
       return const Center(
         child: CircularProgressIndicator(
-          color: Color(0xFF8095FF),
-          strokeWidth: 2.5,
+          color: Color(0xFF8195FF),
         ),
       );
     }
@@ -838,31 +1004,29 @@ class _S04SmartScanState extends State<S04SmartScan>
   }
 
   // ==========================================
-  // HEADER SCAN
+  // HEADER SCAN REAL-TIME
   // ==========================================
 
   Widget _buildScannerHeader() {
     return Row(
       children: [
+        // KEMBALI KE TRANSLATE
         _headerIcon(
           icon: Icons.arrow_back_rounded,
           tooltip: 'Kembali ke Translate',
           onTap: () => openTab(context, 0),
         ),
 
-        const Expanded(
-          child: Text(
-            'Scan teks',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 19,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
+        const SizedBox(width: 9),
+
+        // PEMILIH BAHASA BERGAYA GLASS
+        Expanded(
+          child: _buildGlassLanguagePicker(),
         ),
 
-        // IKON PERBESAR
+        const SizedBox(width: 9),
+
+        // MASUK MODE KAMERA FULLSCREEN
         _headerIcon(
           icon: Icons.open_in_full_rounded,
           tooltip: 'Perbesar kamera',
@@ -887,7 +1051,7 @@ class _S04SmartScanState extends State<S04SmartScan>
       ),
       style: IconButton.styleFrom(
         backgroundColor: Colors.black.withValues(
-          alpha: 0.35,
+          alpha: 0.42,
         ),
         minimumSize: const Size(48, 48),
       ),
@@ -895,7 +1059,7 @@ class _S04SmartScanState extends State<S04SmartScan>
   }
 
   // ==========================================
-  // GALERI - PINDAI - IMPOR
+  // TOMBOL GALERI, PINDAI, IMPOR
   // ==========================================
 
   Widget _buildActions() {
@@ -916,10 +1080,6 @@ class _S04SmartScanState extends State<S04SmartScan>
       ],
     );
   }
-
-  // ==========================================
-  // TOMBOL PINDAI
-  // ==========================================
 
   Widget _buildCameraButton() {
     return InkWell(
@@ -972,10 +1132,6 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
-  // ==========================================
-  // TOMBOL SAMPING
-  // ==========================================
-
   Widget _sideAction({
     required IconData icon,
     required String label,
@@ -1016,20 +1172,15 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
-  // ==========================================
-  // MEMBERSIHKAN RESOURCE
-  // ==========================================
-
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
 
-    // Batalkan seluruh proses start lama.
-    _cameraToken++;
+    _disposing = true;
+    _cameraVersion++;
 
-    // Tutup kamera jika masih aktif.
-    final controller = _cameraController;
-    _cameraController = null;
+    final controller = _camera;
+    _camera = null;
 
     if (controller != null) {
       unawaited(controller.dispose());
@@ -1040,14 +1191,14 @@ class _S04SmartScanState extends State<S04SmartScan>
 }
 
 // ==========================================
-// GARIS SCANNER EMPAT SUDUT
+// GARIS EMPAT SUDUT SCANNER
 // ==========================================
 
-class _ScannerCornersPainter extends CustomPainter {
+class _ScanCornersPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = const Color(0xFF8095FF)
+      ..color = const Color(0xFF8195FF)
       ..strokeWidth = 3
       ..strokeCap = StrokeCap.round
       ..style = PaintingStyle.stroke;
@@ -1055,29 +1206,22 @@ class _ScannerCornersPainter extends CustomPainter {
     const double length = 33;
     const double radius = 13;
 
-    final double w = size.width;
-    final double h = size.height;
+    final w = size.width;
+    final h = size.height;
 
     final path = Path()
-      // KIRI ATAS
       ..moveTo(0, length)
       ..lineTo(0, radius)
       ..quadraticBezierTo(0, 0, radius, 0)
       ..lineTo(length, 0)
-
-      // KANAN ATAS
       ..moveTo(w - length, 0)
       ..lineTo(w - radius, 0)
       ..quadraticBezierTo(w, 0, w, radius)
       ..lineTo(w, length)
-
-      // KIRI BAWAH
       ..moveTo(0, h - length)
       ..lineTo(0, h - radius)
       ..quadraticBezierTo(0, h, radius, h)
       ..lineTo(length, h)
-
-      // KANAN BAWAH
       ..moveTo(w - length, h)
       ..lineTo(w - radius, h)
       ..quadraticBezierTo(w, h, w, h - radius)
