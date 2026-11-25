@@ -14,10 +14,10 @@ import 's04b_camera_capture.dart';
 import 's05_ocr_review.dart';
 import 's06_import_document.dart';
 
-// =============================================
+// ==========================================
 // LASTSEEN - SMART SCAN
-// CAMERA REAL-TIME + GLASSMORPHISM
-// =============================================
+// REAL-TIME CAMERA + GLASSMORPHISM
+// ==========================================
 
 class S04SmartScan extends StatefulWidget {
   const S04SmartScan({super.key});
@@ -28,23 +28,20 @@ class S04SmartScan extends StatefulWidget {
 
 class _S04SmartScanState extends State<S04SmartScan>
     with WidgetsBindingObserver {
-  // ==========================================
-  // WARNA APLIKASI
-  // ==========================================
+  // ========================================
+  // WARNA
+  // ========================================
 
   static const Color primary = Color(0xFF4361EE);
   static const Color navy = Color(0xFF15192D);
   static const Color muted = Color(0xFF8089A1);
   static const Color background = Color(0xFFF8F9FD);
   static const Color border = Color(0xFFDDE3F0);
-
-  // Warna glass untuk semua tombol header.
   static const Color glassColor = Color(0xFF454B61);
-  static const Color glassBorder = Color(0xFFFFFFFF);
 
-  // ==========================================
-  // KAMERA
-  // ==========================================
+  // ========================================
+  // CAMERA CONTROLLER
+  // ========================================
 
   CameraController? _camera;
 
@@ -63,9 +60,9 @@ class _S04SmartScanState extends State<S04SmartScan>
 
   String? _error;
 
-  // ==========================================
+  // ========================================
   // PILIHAN BAHASA
-  // ==========================================
+  // ========================================
 
   String _sourceLanguage = 'English';
   String _targetLanguage = 'Indonesia';
@@ -89,9 +86,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     });
   }
 
-  // ==========================================
-  // MODAL PILIH BAHASA
-  // ==========================================
+  // ========================================
+  // PILIH BAHASA
+  // ========================================
 
   void _showLanguagePicker() {
     showModalBottomSheet<void>(
@@ -178,9 +175,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
-  // ==========================================
-  // ITEM PILIHAN BAHASA
-  // ==========================================
+  // ========================================
+  // PILIHAN PADA BOTTOM SHEET
+  // ========================================
 
   Widget _languageOption({
     required String title,
@@ -230,10 +227,10 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
-  // ==========================================
-  // GLASS LANGUAGE PICKER
+  // ========================================
+  // LANGUAGE PICKER GLASS
   // TANPA GARIS PEMISAH
-  // ==========================================
+  // ========================================
 
   Widget _buildGlassLanguagePicker() {
     return ClipRRect(
@@ -251,7 +248,7 @@ class _S04SmartScanState extends State<S04SmartScan>
             ),
             borderRadius: BorderRadius.circular(28),
             border: Border.all(
-              color: glassBorder.withValues(
+              color: Colors.white.withValues(
                 alpha: 0.28,
               ),
               width: 1,
@@ -259,7 +256,6 @@ class _S04SmartScanState extends State<S04SmartScan>
           ),
           child: Row(
             children: [
-              // NAMA BAHASA
               Expanded(
                 child: Material(
                   color: Colors.transparent,
@@ -287,9 +283,6 @@ class _S04SmartScanState extends State<S04SmartScan>
                   ),
                 ),
               ),
-
-              // TOMBOL TUKAR BAHASA
-              // TANPA GARIS VERTIKAL
               IconButton(
                 tooltip: 'Tukar bahasa',
                 onPressed: _swapLanguage,
@@ -311,10 +304,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
-  // ==========================================
+  // ========================================
   // TOMBOL LINGKARAN GLASS
-  // DIPAKAI UNTUK BACK DAN PERBESAR
-  // ==========================================
+  // ========================================
 
   Widget _glassCircleButton({
     required IconData icon,
@@ -329,26 +321,26 @@ class _S04SmartScanState extends State<S04SmartScan>
             sigmaX: 15,
             sigmaY: 15,
           ),
-          child: Container(
-            width: 49,
-            height: 49,
-            decoration: BoxDecoration(
-              color: glassColor.withValues(
-                alpha: 0.43,
-              ),
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: glassBorder.withValues(
-                  alpha: 0.28,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onTap,
+              customBorder: const CircleBorder(),
+              child: Container(
+                width: 49,
+                height: 49,
+                decoration: BoxDecoration(
+                  color: glassColor.withValues(
+                    alpha: 0.43,
+                  ),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Colors.white.withValues(
+                      alpha: 0.28,
+                    ),
+                    width: 1,
+                  ),
                 ),
-                width: 1,
-              ),
-            ),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: onTap,
-                customBorder: const CircleBorder(),
                 child: Center(
                   child: Icon(
                     icon,
@@ -364,9 +356,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
-  // ==========================================
-  // KONDISI KAMERA
-  // ==========================================
+  // ========================================
+  // STATUS KAMERA
+  // ========================================
 
   bool get _shouldRun =>
       mounted &&
@@ -378,9 +370,9 @@ class _S04SmartScanState extends State<S04SmartScan>
 
   bool _isCurrent(int version) => _shouldRun && _cameraVersion == version;
 
-  // ==========================================
+  // ========================================
   // LIFECYCLE
-  // ==========================================
+  // ========================================
 
   @override
   void initState() {
@@ -417,9 +409,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     _syncCamera();
   }
 
-  // ==========================================
-  // SINKRONISASI KAMERA REAL-TIME
-  // ==========================================
+  // ========================================
+  // SINKRONISASI CAMERA CONTROLLER
+  // ========================================
 
   void _syncCamera() {
     if (!mounted || _disposing || kIsWeb) {
@@ -452,9 +444,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
-  // ==========================================
-  // INISIALISASI KAMERA
-  // ==========================================
+  // ========================================
+  // MEMBUKA KAMERA REAL-TIME
+  // ========================================
 
   Future<void> _initializeCamera(int version) async {
     try {
@@ -475,7 +467,7 @@ class _S04SmartScanState extends State<S04SmartScan>
         orElse: () => cameras.first,
       );
 
-      // COBA MEMBUKA KAMERA MAKSIMAL 3 KALI
+      // Maksimal tiga kali percobaan.
       for (int attempt = 0; attempt < 3; attempt++) {
         if (!_isCurrent(version)) {
           return;
@@ -538,9 +530,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     }
   }
 
-  // ==========================================
+  // ========================================
   // MENGHENTIKAN KAMERA
-  // ==========================================
+  // ========================================
 
   Future<void> _stopCamera() async {
     _cameraVersion++;
@@ -568,9 +560,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     }
   }
 
-  // ==========================================
+  // ========================================
   // MELEPAS CAMERA CONTROLLER
-  // ==========================================
+  // ========================================
 
   Future<void> _releaseCamera() async {
     final starting = _starting;
@@ -599,9 +591,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     }
   }
 
-  // ==========================================
-  // TAMPILKAN PESAN
-  // ==========================================
+  // ========================================
+  // MENAMPILKAN PESAN
+  // ========================================
 
   void _showMessage(String message) {
     if (!mounted) return;
@@ -613,9 +605,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
-  // ==========================================
-  // MEMBACA TEKS DARI GAMBAR
-  // ==========================================
+  // ========================================
+  // OCR
+  // ========================================
 
   Future<String> _readText(String path) async {
     final recognizer = TextRecognizer(
@@ -633,9 +625,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     }
   }
 
-  // ==========================================
+  // ========================================
   // HALAMAN HASIL OCR
-  // ==========================================
+  // ========================================
 
   Future<void> _showResult(String text) async {
     if (!mounted || text.isEmpty) {
@@ -673,9 +665,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     }
   }
 
-  // ==========================================
-  // PINDAI LANGSUNG DARI KAMERA REAL-TIME
-  // ==========================================
+  // ========================================
+  // PINDAI KAMERA REAL-TIME
+  // ========================================
 
   Future<void> _captureInline() async {
     if (_busy || _suspended) {
@@ -725,9 +717,10 @@ class _S04SmartScanState extends State<S04SmartScan>
     }
   }
 
-  // ==========================================
-  // MEMBUKA KAMERA FULLSCREEN
-  // ==========================================
+  // ========================================
+  // BUKA FULLSCREEN CAMERA
+  // OPTIMASI: TANPA JEDA 350 MS SAAT KEMBALI
+  // ========================================
 
   Future<void> _openFullCamera() async {
     if (_busy || _suspended) {
@@ -746,7 +739,8 @@ class _S04SmartScanState extends State<S04SmartScan>
       _error = null;
     });
 
-    // LEPASKAN KAMERA REAL-TIME DULU
+    // 1. Lepaskan kamera real-time agar
+    // tidak bentrok dengan kamera fullscreen.
     await _stopCamera();
 
     if (!mounted) return;
@@ -756,15 +750,18 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
 
     try {
+      // 2. Buka kamera fullscreen.
       final text = await Navigator.of(context).push<String>(
         route,
       );
 
-      // TUNGGU FULLSCREEN BENAR-BENAR DITUTUP
+      // 3. Tunggu sampai route fullscreen
+      // benar-benar selesai ditutup.
       await route.completed;
 
       if (!mounted) return;
 
+      // 4. Tampilkan OCR jika ada hasil.
       if (text != null && text.trim().isNotEmpty) {
         final resultRoute = MaterialPageRoute<void>(
           builder: (_) => S05OcrReview(
@@ -783,10 +780,10 @@ class _S04SmartScanState extends State<S04SmartScan>
         'Mode kamera gagal dibuka.',
       );
     } finally {
-      // TUNGGU RESOURCE KAMERA ANDROID SIAP
-      await Future<void>.delayed(
-        const Duration(milliseconds: 350),
-      );
+      // ====================================
+      // PERBAIKAN:
+      // TIDAK ADA JEDA 350 MILIDETIK LAGI.
+      // ====================================
 
       if (mounted) {
         setState(() {
@@ -794,17 +791,19 @@ class _S04SmartScanState extends State<S04SmartScan>
           _error = null;
         });
 
+        // Periksa kembali status tab Scan.
         _tabVisible = TickerMode.of(context);
 
-        // AKTIFKAN KEMBALI KAMERA REAL-TIME
+        // Langsung jalankan inisialisasi
+        // kamera real-time kembali.
         _syncCamera();
       }
     }
   }
 
-  // ==========================================
+  // ========================================
   // GALERI
-  // ==========================================
+  // ========================================
 
   Future<void> _openGallery() async {
     if (_busy || _suspended) {
@@ -875,9 +874,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     }
   }
 
-  // ==========================================
+  // ========================================
   // IMPOR DOKUMEN
-  // ==========================================
+  // ========================================
 
   Future<void> _openImport() async {
     if (_busy || _suspended) {
@@ -913,9 +912,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     }
   }
 
-  // ==========================================
-  // HALAMAN UTAMA
-  // ==========================================
+  // ========================================
+  // TAMPILAN HALAMAN SCAN
+  // ========================================
 
   @override
   Widget build(BuildContext context) {
@@ -963,7 +962,7 @@ class _S04SmartScanState extends State<S04SmartScan>
               ),
             ),
 
-            // MENCEGAH BOTTOM NAV GANDA
+            // BottomNav tidak ditampilkan ganda.
             if (!MainTabShell.isEmbedded(context))
               BottomNav(
                 currentIndex: 1,
@@ -975,9 +974,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
-  // ==========================================
+  // ========================================
   // PANEL SCANNER
-  // ==========================================
+  // ========================================
 
   Widget _buildScanner(double height) {
     return Container(
@@ -990,12 +989,12 @@ class _S04SmartScanState extends State<S04SmartScan>
       ),
       child: Stack(
         children: [
-          // KAMERA REAL-TIME
+          // LIVE CAMERA
           Positioned.fill(
             child: _buildLivePreview(),
           ),
 
-          // OVERLAY TIPIS
+          // OVERLAY TRANSPARAN
           const Positioned.fill(
             child: IgnorePointer(
               child: ColoredBox(
@@ -1004,7 +1003,7 @@ class _S04SmartScanState extends State<S04SmartScan>
             ),
           ),
 
-          // BINGKAI PEMINDAI
+          // BINGKAI EMPAT SUDUT
           Positioned(
             top: height * 0.19,
             bottom: height * 0.18,
@@ -1017,7 +1016,7 @@ class _S04SmartScanState extends State<S04SmartScan>
             ),
           ),
 
-          // HEADER GLASS BARU
+          // HEADER GLASS
           Positioned(
             top: 17,
             left: 17,
@@ -1057,9 +1056,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
-  // ==========================================
-  // TAMPILAN KAMERA REAL-TIME
-  // ==========================================
+  // ========================================
+  // PREVIEW KAMERA REAL-TIME
+  // ========================================
 
   Widget _buildLivePreview() {
     final controller = _camera;
@@ -1124,15 +1123,14 @@ class _S04SmartScanState extends State<S04SmartScan>
     return const SizedBox.expand();
   }
 
-  // ==========================================
+  // ========================================
   // HEADER SCAN REAL-TIME
-  // SEMUA MENGGUNAKAN GLASSMORPHISM
-  // ==========================================
+  // ========================================
 
   Widget _buildScannerHeader() {
     return Row(
       children: [
-        // TOMBOL KEMBALI BERGAYA GLASS
+        // KEMBALI
         _glassCircleButton(
           icon: Icons.arrow_back_rounded,
           tooltip: 'Kembali ke Translate',
@@ -1141,14 +1139,14 @@ class _S04SmartScanState extends State<S04SmartScan>
 
         const SizedBox(width: 9),
 
-        // PILIHAN BAHASA BERGAYA GLASS
+        // PILIH BAHASA
         Expanded(
           child: _buildGlassLanguagePicker(),
         ),
 
         const SizedBox(width: 9),
 
-        // IKON PERBESAR BERGAYA GLASS
+        // FULLSCREEN
         _glassCircleButton(
           icon: Icons.open_in_full_rounded,
           tooltip: 'Perbesar kamera',
@@ -1158,9 +1156,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
-  // ==========================================
+  // ========================================
   // TOMBOL GALERI, PINDAI, IMPOR
-  // ==========================================
+  // ========================================
 
   Widget _buildActions() {
     return Row(
@@ -1181,9 +1179,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
-  // ==========================================
+  // ========================================
   // TOMBOL PINDAI
-  // ==========================================
+  // ========================================
 
   Widget _buildCameraButton() {
     return InkWell(
@@ -1236,9 +1234,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
-  // ==========================================
+  // ========================================
   // TOMBOL GALERI DAN IMPOR
-  // ==========================================
+  // ========================================
 
   Widget _sideAction({
     required IconData icon,
@@ -1280,9 +1278,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
-  // ==========================================
-  // MEMBERSIHKAN RESOURCE
-  // ==========================================
+  // ========================================
+  // MEMBERSIHKAN CAMERA CONTROLLER
+  // ========================================
 
   @override
   void dispose() {
@@ -1302,9 +1300,9 @@ class _S04SmartScanState extends State<S04SmartScan>
   }
 }
 
-// =============================================
-// GARIS EMPAT SUDUT SCANNER
-// =============================================
+// ==========================================
+// PAINTER BINGKAI SCANNER
+// ==========================================
 
 class _ScanCornersPainter extends CustomPainter {
   @override
@@ -1322,7 +1320,6 @@ class _ScanCornersPainter extends CustomPainter {
     final h = size.height;
 
     final path = Path()
-
       // KIRI ATAS
       ..moveTo(0, length)
       ..lineTo(0, radius)
