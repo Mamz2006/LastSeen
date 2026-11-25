@@ -7,7 +7,7 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 
 // ==========================================
 // LASTSEEN - FULLSCREEN CAMERA
-// GLASSMORPHISM HEADER
+// GLASS UI + FAST CAMERA PREVIEW
 // ==========================================
 
 class S04BCameraCapture extends StatefulWidget {
@@ -26,7 +26,7 @@ enum _FrameCorner {
 
 class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   // ========================================
-  // WARNA DAN DESAIN
+  // WARNA
   // ========================================
 
   static const Color primary = Color(0xFF4361EE);
@@ -59,13 +59,13 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   // ZOOM
   // ========================================
 
-  double _minZoom = 1;
-  double _maxZoom = 1;
-  double _zoom = 1;
-  double _pinchStartZoom = 1;
+  double _minZoom = 1.0;
+  double _maxZoom = 1.0;
+  double _zoom = 1.0;
+  double _pinchStartZoom = 1.0;
 
   // ========================================
-  // POSISI BINGKAI SCAN
+  // POSISI BINGKAI
   // ========================================
 
   double _left = 0.09;
@@ -83,11 +83,13 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // MEMBUKA KAMERA
+  // MEMBUKA KAMERA LEBIH CEPAT
   // ========================================
 
   Future<void> _initializeCamera() async {
-    if (_initializing || _closing) return;
+    if (_initializing || _closing || _controller != null) {
+      return;
+    }
 
     _initializing = true;
 
@@ -105,41 +107,75 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
         orElse: () => cameras.first,
       );
 
-      candidate = CameraController(
+      final activeCamera = CameraController(
         rearCamera,
         ResolutionPreset.high,
         enableAudio: false,
       );
 
-      await candidate.initialize();
+      candidate = activeCamera;
 
-      final minZoom = await candidate.getMinZoomLevel();
-
-      final maxZoom = await candidate.getMaxZoomLevel();
+      // 1. Tunggu hanya sampai kamera siap.
+      await activeCamera.initialize();
 
       if (!mounted || _closing) {
-        await candidate.dispose();
+        await activeCamera.dispose();
         return;
       }
 
-      final initialZoom = 1.0.clamp(minZoom, maxZoom).toDouble();
-
-      await candidate.setZoomLevel(initialZoom);
-
-      if (!mounted || _closing) {
-        await candidate.dispose();
-        return;
-      }
-
+      // 2. TAMPILKAN PREVIEW LANGSUNG.
+      // Tidak menunggu pengaturan zoom.
       setState(() {
-        _controller = candidate;
-        _minZoom = minZoom;
-        _maxZoom = maxZoom;
-        _zoom = initialZoom;
+        _controller = activeCamera;
         _error = null;
       });
+
+      // 3. Siapkan zoom setelah preview muncul.
+      // Bila proses zoom gagal, kamera tetap jalan.
+      try {
+        final zoomLimits = await Future.wait<double>([
+          activeCamera.getMinZoomLevel(),
+          activeCamera.getMaxZoomLevel(),
+        ]);
+
+        if (!mounted || _closing || !identical(_controller, activeCamera)) {
+          return;
+        }
+
+        final minZoom = zoomLimits[0];
+        final maxZoom = zoomLimits[1];
+
+        final initialZoom = 1.0.clamp(minZoom, maxZoom).toDouble();
+
+        setState(() {
+          _minZoom = minZoom;
+          _maxZoom = maxZoom;
+          _zoom = initialZoom;
+        });
+
+        if (initialZoom != 1.0) {
+          await activeCamera.setZoomLevel(
+            initialZoom,
+          );
+        }
+      } catch (_) {
+        // Kegagalan mengambil batas zoom
+        // tidak menghentikan preview kamera.
+      }
+    } on CameraException catch (e) {
+      if (candidate != null && !identical(_controller, candidate)) {
+        try {
+          await candidate.dispose();
+        } catch (_) {}
+      }
+
+      if (mounted && !_closing) {
+        setState(() {
+          _error = e.description ?? 'Kamera gagal dibuka. Coba lagi.';
+        });
+      }
     } catch (_) {
-      if (candidate != null) {
+      if (candidate != null && !identical(_controller, candidate)) {
         try {
           await candidate.dispose();
         } catch (_) {}
@@ -160,6 +196,8 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   // ========================================
 
   void _swapLanguage() {
+    if (_busy || _closing) return;
+
     setState(() {
       final previous = _sourceLanguage;
 
@@ -172,6 +210,8 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
     required String source,
     required String target,
   }) {
+    if (_busy || _closing) return;
+
     setState(() {
       _sourceLanguage = source;
       _targetLanguage = target;
@@ -269,6 +309,10 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
     );
   }
 
+  // ========================================
+  // PILIHAN BAHASA PADA BOTTOM SHEET
+  // ========================================
+
   Widget _languageOption({
     required String title,
     required bool selected,
@@ -308,6 +352,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                 const Icon(
                   Icons.check_circle_rounded,
                   color: Color(0xFF91A1FF),
+                  size: 23,
                 ),
             ],
           ),
@@ -317,7 +362,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // PEMILIH BAHASA GLASS
+  // GLASS LANGUAGE PICKER
   // TANPA GARIS PEMISAH
   // ========================================
 
@@ -345,6 +390,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
           ),
           child: Row(
             children: [
+              // NAMA BAHASA
               Expanded(
                 child: Material(
                   color: Colors.transparent,
@@ -353,7 +399,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                     child: Center(
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 9,
+                          horizontal: 16,
                         ),
                         child: FittedBox(
                           fit: BoxFit.scaleDown,
@@ -362,8 +408,8 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                             maxLines: 1,
                             style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ),
@@ -373,8 +419,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                 ),
               ),
 
-              // Tombol tukar bahasa.
-              // Tidak ada garis pemisah.
+              // TOMBOL TUKAR BAHASA
               IconButton(
                 tooltip: 'Tukar bahasa',
                 onPressed: _busy || _closing ? null : _swapLanguage,
@@ -398,7 +443,6 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
 
   // ========================================
   // TOMBOL BULAT GLASS
-  // UNTUK KEMBALI DAN FLASH
   // ========================================
 
   Widget _glassCircleButton({
@@ -450,13 +494,13 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // HEADER FULLSCREEN GLASS
+  // HEADER FULLSCREEN
   // ========================================
 
   Widget _buildHeader() {
     return Row(
       children: [
-        // Tombol kembali.
+        // KEMBALI
         _glassCircleButton(
           icon: Icons.arrow_back_rounded,
           tooltip: 'Kembali',
@@ -469,14 +513,14 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
 
         const SizedBox(width: 9),
 
-        // Pemilih bahasa.
+        // PILIHAN BAHASA
         Expanded(
           child: _buildGlassLanguagePicker(),
         ),
 
         const SizedBox(width: 9),
 
-        // Tombol flash.
+        // FLASH
         _glassCircleButton(
           icon: _flashOn ? Icons.flash_on_rounded : Icons.flash_off_rounded,
           tooltip: _flashOn ? 'Matikan flash' : 'Nyalakan flash',
@@ -491,7 +535,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // MENYALAKAN / MEMATIKAN FLASH
+  // FLASH ON / OFF
   // ========================================
 
   Future<void> _toggleFlash() async {
@@ -541,7 +585,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // MENGATUR ZOOM
+  // ZOOM
   // ========================================
 
   void _changeZoom(double value) {
@@ -564,19 +608,18 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
       controller.setZoomLevel(next).catchError(
         (Object error) {
           // Abaikan perubahan zoom yang sudah
-          // tidak berlaku ketika kamera ditutup.
+          // tidak berlaku saat kamera ditutup.
         },
       ),
     );
   }
 
   // ========================================
-  // MENGHENTIKAN KAMERA
+  // MELEPAS KAMERA
   // ========================================
 
   Future<void> _releaseCamera() async {
     final controller = _controller;
-
     _controller = null;
 
     if (controller != null) {
@@ -593,7 +636,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // KEMBALI DARI MODE FULLSCREEN
+  // KEMBALI KE SCAN REAL-TIME
   // ========================================
 
   Future<void> _close(String? result) async {
@@ -602,7 +645,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
     _closing = true;
 
     // Lepaskan kamera fullscreen sebelum
-    // halaman real-time aktif kembali.
+    // kamera real-time digunakan kembali.
     await _releaseCamera();
 
     if (!mounted) return;
@@ -611,7 +654,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // OCR FOTO KAMERA
+  // OCR
   // ========================================
 
   Future<void> _capture() async {
@@ -671,7 +714,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // MENGGESER SELURUH BINGKAI
+  // GESER SELURUH BINGKAI
   // ========================================
 
   void _moveFrame(Offset delta, Size size) {
@@ -695,7 +738,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // MENGUBAH UKURAN BINGKAI
+  // UBAH UKURAN BINGKAI
   // ========================================
 
   void _resizeFrame(
@@ -738,7 +781,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // AREA SENTUH PADA SUDUT
+  // AREA SENTUH SUDUT
   // ========================================
 
   Widget _cornerHandle({
@@ -861,19 +904,27 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // KAMERA FULLSCREEN REAL-TIME
+  // PREVIEW KAMERA FULLSCREEN
   // ========================================
 
   Widget _buildPreview() {
     final controller = _controller;
 
     if (controller == null || !controller.value.isInitialized) {
-      return const ColoredBox(
+      // Loading hanya selama kamera
+      // belum selesai diinisialisasi.
+      return ColoredBox(
         color: navy,
         child: Center(
-          child: CircularProgressIndicator(
-            color: primary,
-          ),
+          child: _error == null
+              ? const CircularProgressIndicator(
+                  color: primary,
+                )
+              : const Icon(
+                  Icons.camera_alt_outlined,
+                  color: Colors.white54,
+                  size: 48,
+                ),
         ),
       );
     }
@@ -899,6 +950,8 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   // ========================================
 
   Widget _buildZoom() {
+    final zoomReady = _ready && !_busy && !_closing && _maxZoom > _minZoom;
+
     return Container(
       padding: const EdgeInsets.symmetric(
         horizontal: 16,
@@ -932,11 +985,11 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
               ),
               child: Slider(
                 min: _minZoom,
-                max: _maxZoom > _minZoom ? _maxZoom : _minZoom + 1,
-                value: _zoom,
-                onChanged: _ready && !_busy && _maxZoom > _minZoom
-                    ? _changeZoom
-                    : null,
+                max: zoomReady ? _maxZoom : _minZoom + 1,
+                value: zoomReady
+                    ? _zoom.clamp(_minZoom, _maxZoom).toDouble()
+                    : _minZoom,
+                onChanged: zoomReady ? _changeZoom : null,
               ),
             ),
           ),
@@ -1009,79 +1062,91 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: navy,
-      body: Stack(
-        children: [
-          // Kamera memenuhi layar.
-          Positioned.fill(
-            child: _buildPreview(),
-          ),
-
-          // Pinch zoom.
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onScaleStart: (_) {
-                _pinchStartZoom = _zoom;
-              },
-              onScaleUpdate: (details) {
-                if (details.pointerCount >= 2) {
-                  _changeZoom(
-                    _pinchStartZoom * details.scale,
-                  );
-                }
-              },
-              child: const SizedBox.expand(),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && !_busy && !_closing) {
+          unawaited(_close(null));
+        }
+      },
+      child: Scaffold(
+        backgroundColor: navy,
+        body: Stack(
+          children: [
+            // PREVIEW KAMERA
+            Positioned.fill(
+              child: _buildPreview(),
             ),
-          ),
 
-          // Bingkai scan.
-          if (_ready) _buildAdjustableFrame(),
-
-          // Header dan tombol bawah.
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(
-                18,
-                16,
-                18,
-                22,
+            // PINCH ZOOM
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onScaleStart: (_) {
+                  _pinchStartZoom = _zoom;
+                },
+                onScaleUpdate: (details) {
+                  if (details.pointerCount >= 2) {
+                    _changeZoom(
+                      _pinchStartZoom * details.scale,
+                    );
+                  }
+                },
+                child: const SizedBox.expand(),
               ),
-              child: Column(
-                children: [
-                  _buildHeader(),
-                  const Spacer(),
-                  if (_error != null) ...[
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFBC4057),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Text(
-                        _error!,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
+            ),
+
+            // BINGKAI SCAN
+            if (_ready) _buildAdjustableFrame(),
+
+            // KONTROL KAMERA
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  18,
+                  16,
+                  18,
+                  22,
+                ),
+                child: Column(
+                  children: [
+                    _buildHeader(),
+                    const Spacer(),
+                    if (_error != null) ...[
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFBC4057),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Text(
+                          _error!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 18),
+                      const SizedBox(height: 18),
+                    ],
+                    _buildZoom(),
+                    const SizedBox(height: 24),
+                    _buildCaptureButton(),
                   ],
-                  _buildZoom(),
-                  const SizedBox(height: 24),
-                  _buildCaptureButton(),
-                ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
+
+  // ========================================
+  // MEMBERSIHKAN CAMERA CONTROLLER
+  // ========================================
 
   @override
   void dispose() {
@@ -1099,7 +1164,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
 }
 
 // ==========================================
-// PAINTER EMPAT SUDUT BINGKAI
+// GARIS EMPAT SUDUT BINGKAI
 // ==========================================
 
 class _CameraCornersPainter extends CustomPainter {
@@ -1118,25 +1183,25 @@ class _CameraCornersPainter extends CustomPainter {
     final h = size.height;
 
     final path = Path()
-      // Kiri atas.
+      // KIRI ATAS
       ..moveTo(0, length)
       ..lineTo(0, radius)
       ..quadraticBezierTo(0, 0, radius, 0)
       ..lineTo(length, 0)
 
-      // Kanan atas.
+      // KANAN ATAS
       ..moveTo(w - length, 0)
       ..lineTo(w - radius, 0)
       ..quadraticBezierTo(w, 0, w, radius)
       ..lineTo(w, length)
 
-      // Kiri bawah.
+      // KIRI BAWAH
       ..moveTo(0, h - length)
       ..lineTo(0, h - radius)
       ..quadraticBezierTo(0, h, radius, h)
       ..lineTo(length, h)
 
-      // Kanan bawah.
+      // KANAN BAWAH
       ..moveTo(w - length, h)
       ..lineTo(w - radius, h)
       ..quadraticBezierTo(w, h, w, h - radius)
