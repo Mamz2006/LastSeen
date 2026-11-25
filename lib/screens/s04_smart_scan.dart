@@ -259,13 +259,6 @@ class _S04SmartScanState extends State<S04SmartScan>
                 ),
               ),
 
-              // PEMBATAS TIPIS
-              Container(
-                width: 1,
-                height: 24,
-                color: Colors.white24,
-              ),
-
               // TOMBOL TUKAR BAHASA
               IconButton(
                 tooltip: 'Tukar bahasa',
