@@ -268,7 +268,7 @@ class _S04SmartScanState extends State<S04SmartScan>
                     child: Center(
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 9,
+                          horizontal: 16,
                         ),
                         child: FittedBox(
                           fit: BoxFit.scaleDown,
@@ -277,8 +277,8 @@ class _S04SmartScanState extends State<S04SmartScan>
                             maxLines: 1,
                             style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ),

@@ -1,15 +1,14 @@
-import 'dart:math' as math;
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 
-// PREFERENSI BAHASA SELAMA APLIKASI BERJALAN
-class ScanLanguageSettings {
-  static String fromLanguage = 'English';
-  static String toLanguage = 'Indonesia';
-}
+// ==========================================
+// LASTSEEN - FULLSCREEN CAMERA
+// GLASSMORPHISM HEADER
+// ==========================================
 
 class S04BCameraCapture extends StatefulWidget {
   const S04BCameraCapture({super.key});
@@ -18,8 +17,7 @@ class S04BCameraCapture extends StatefulWidget {
   State<S04BCameraCapture> createState() => _S04BCameraCaptureState();
 }
 
-enum _FrameHandle {
-  move,
+enum _FrameCorner {
   topLeft,
   topRight,
   bottomLeft,
@@ -27,392 +25,347 @@ enum _FrameHandle {
 }
 
 class _S04BCameraCaptureState extends State<S04BCameraCapture> {
+  // ========================================
+  // WARNA DAN DESAIN
+  // ========================================
+
   static const Color primary = Color(0xFF4361EE);
   static const Color navy = Color(0xFF15192D);
+  static const Color glassColor = Color(0xFF454B61);
+
+  // ========================================
+  // CAMERA CONTROLLER
+  // ========================================
 
   CameraController? _controller;
 
+  bool _initializing = false;
   bool _busy = false;
   bool _flashOn = false;
   bool _changingFlash = false;
-  bool _showFrameHint = true;
+  bool _closing = false;
+  bool _showHint = true;
 
   String? _error;
 
+  // ========================================
   // BAHASA
-  late String _fromLanguage;
-  late String _toLanguage;
+  // ========================================
 
+  String _sourceLanguage = 'English';
+  String _targetLanguage = 'Indonesia';
+
+  // ========================================
   // ZOOM
-  double _minZoom = 1.0;
-  double _maxZoom = 1.0;
-  double _zoom = 1.0;
-  double _zoomAtScaleStart = 1.0;
+  // ========================================
 
-  // BINGKAI SCANNER
-  Rect _scanFrame = const Rect.fromLTWH(
-    0.09,
-    0.33,
-    0.82,
-    0.32,
-  );
+  double _minZoom = 1;
+  double _maxZoom = 1;
+  double _zoom = 1;
+  double _pinchStartZoom = 1;
+
+  // ========================================
+  // POSISI BINGKAI SCAN
+  // ========================================
+
+  double _left = 0.09;
+  double _top = 0.34;
+  double _right = 0.91;
+  double _bottom = 0.69;
+
+  bool get _ready => _controller != null && _controller!.value.isInitialized;
 
   @override
   void initState() {
     super.initState();
 
-    _fromLanguage = ScanLanguageSettings.fromLanguage;
-    _toLanguage = ScanLanguageSettings.toLanguage;
-
-    _initCamera();
+    unawaited(_initializeCamera());
   }
 
-  // =====================================
-  // INISIALISASI KAMERA
-  // =====================================
-  Future<void> _initCamera() async {
+  // ========================================
+  // MEMBUKA KAMERA
+  // ========================================
+
+  Future<void> _initializeCamera() async {
+    if (_initializing || _closing) return;
+
+    _initializing = true;
+
+    CameraController? candidate;
+
     try {
       final cameras = await availableCameras();
 
       if (cameras.isEmpty) {
-        if (!mounted) return;
-        setState(() {
-          _error = 'Kamera tidak ditemukan.';
-        });
-        return;
+        throw StateError('Kamera tidak ditemukan.');
       }
 
-      final camera = cameras.firstWhere(
-        (item) => item.lensDirection == CameraLensDirection.back,
+      final rearCamera = cameras.firstWhere(
+        (camera) => camera.lensDirection == CameraLensDirection.back,
         orElse: () => cameras.first,
       );
 
-      final controller = CameraController(
-        camera,
+      candidate = CameraController(
+        rearCamera,
         ResolutionPreset.high,
         enableAudio: false,
       );
 
-      try {
-        await controller.initialize();
-      } catch (_) {
-        await controller.dispose();
-        rethrow;
-      }
+      await candidate.initialize();
 
-      if (!mounted) {
-        await controller.dispose();
+      final minZoom = await candidate.getMinZoomLevel();
+
+      final maxZoom = await candidate.getMaxZoomLevel();
+
+      if (!mounted || _closing) {
+        await candidate.dispose();
         return;
       }
 
-      double minZoom = 1.0;
-      double maxZoom = 1.0;
+      final initialZoom = 1.0.clamp(minZoom, maxZoom).toDouble();
 
-      try {
-        minZoom = await controller.getMinZoomLevel();
-        maxZoom = await controller.getMaxZoomLevel();
-      } catch (_) {
-        // Zoom tidak tersedia pada kamera tertentu.
-      }
+      await candidate.setZoomLevel(initialZoom);
 
-      maxZoom = math.max(
-        minZoom,
-        math.min(maxZoom, 6.0),
-      );
-
-      try {
-        await controller.setFlashMode(
-          FlashMode.off,
-        );
-      } catch (_) {
-        // Flash mungkin tidak didukung.
-      }
-
-      if (!mounted) {
-        await controller.dispose();
+      if (!mounted || _closing) {
+        await candidate.dispose();
         return;
       }
 
       setState(() {
-        _controller = controller;
+        _controller = candidate;
         _minZoom = minZoom;
         _maxZoom = maxZoom;
-        _zoom = minZoom;
+        _zoom = initialZoom;
         _error = null;
       });
-    } on CameraException catch (e) {
-      if (!mounted) return;
-
-      setState(() {
-        _error = e.description ?? 'Gagal membuka kamera.';
-      });
     } catch (_) {
-      if (!mounted) return;
+      if (candidate != null) {
+        try {
+          await candidate.dispose();
+        } catch (_) {}
+      }
 
-      setState(() {
-        _error = 'Kamera tidak dapat dijalankan.';
-      });
+      if (mounted && !_closing) {
+        setState(() {
+          _error = 'Kamera gagal dibuka. Periksa izin kamera.';
+        });
+      }
+    } finally {
+      _initializing = false;
     }
   }
 
-  // =====================================
-  // MENYIMPAN PILIHAN BAHASA
-  // =====================================
-  void _saveLanguages(
-    String source,
-    String target,
-  ) {
-    if (source == target) return;
+  // ========================================
+  // TUKAR BAHASA
+  // ========================================
 
+  void _swapLanguage() {
     setState(() {
-      _fromLanguage = source;
-      _toLanguage = target;
+      final previous = _sourceLanguage;
 
-      ScanLanguageSettings.fromLanguage = source;
-      ScanLanguageSettings.toLanguage = target;
+      _sourceLanguage = _targetLanguage;
+      _targetLanguage = previous;
     });
   }
 
-  // =====================================
-  // TUKAR BAHASA
-  // =====================================
-  void _swapLanguage() {
-    _saveLanguages(
-      _toLanguage,
-      _fromLanguage,
-    );
+  void _changeLanguage({
+    required String source,
+    required String target,
+  }) {
+    setState(() {
+      _sourceLanguage = source;
+      _targetLanguage = target;
+    });
   }
 
-  // =====================================
-  // PILIH BAHASA MELALUI BOTTOM SHEET
-  // =====================================
-  Future<void> _showLanguageSheet() async {
-    if (_busy) return;
+  // ========================================
+  // PILIH BAHASA
+  // ========================================
 
-    String tempFrom = _fromLanguage;
-    String tempTo = _toLanguage;
+  void _showLanguagePicker() {
+    if (_busy || _closing) return;
 
-    await showModalBottomSheet<void>(
+    showModalBottomSheet<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: const Color(0xFFF8F9FD),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(
-          top: Radius.circular(28),
-        ),
-      ),
+      backgroundColor: Colors.transparent,
       builder: (sheetContext) {
-        return StatefulBuilder(
-          builder: (sheetContext, setSheetState) {
-            return SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  22,
-                  22,
-                  22,
-                  28,
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 42,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFD4D9E8),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 23),
-                    const Center(
-                      child: Text(
-                        'Pilih Bahasa',
-                        style: TextStyle(
-                          color: navy,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    const Text(
-                      'Bahasa sumber',
-                      style: TextStyle(
-                        color: navy,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    _languageChoices(
-                      selected: tempFrom,
-                      onSelected: (language) {
-                        setSheetState(() {
-                          tempFrom = language;
-
-                          if (tempFrom == tempTo) {
-                            tempTo =
-                                language == 'English' ? 'Indonesia' : 'English';
-                          }
-                        });
-                      },
-                    ),
-                    const SizedBox(height: 22),
-                    const Text(
-                      'Terjemahkan ke',
-                      style: TextStyle(
-                        color: navy,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    _languageChoices(
-                      selected: tempTo,
-                      onSelected: (language) {
-                        setSheetState(() {
-                          tempTo = language;
-
-                          if (tempFrom == tempTo) {
-                            tempFrom =
-                                language == 'English' ? 'Indonesia' : 'English';
-                          }
-                        });
-                      },
-                    ),
-                    const SizedBox(height: 26),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 52,
-                      child: ElevatedButton(
-                        onPressed: () {
-                          _saveLanguages(
-                            tempFrom,
-                            tempTo,
-                          );
-                          Navigator.pop(sheetContext);
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: primary,
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                        ),
-                        child: const Text(
-                          'Simpan Bahasa',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+        return SafeArea(
+          top: false,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(
+              22,
+              14,
+              22,
+              28,
+            ),
+            decoration: const BoxDecoration(
+              color: Color(0xFF191E32),
+              borderRadius: BorderRadius.vertical(
+                top: Radius.circular(28),
               ),
-            );
-          },
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.white30,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                const Text(
+                  'Pilih bahasa pemindaian',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 21,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Tentukan arah bahasa yang digunakan.',
+                  style: TextStyle(
+                    color: Color(0xFFA6AEC8),
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                _languageOption(
+                  title: 'English → Indonesia',
+                  selected: _sourceLanguage == 'English',
+                  onTap: () {
+                    _changeLanguage(
+                      source: 'English',
+                      target: 'Indonesia',
+                    );
+
+                    Navigator.pop(sheetContext);
+                  },
+                ),
+                const SizedBox(height: 12),
+                _languageOption(
+                  title: 'Indonesia → English',
+                  selected: _sourceLanguage == 'Indonesia',
+                  onTap: () {
+                    _changeLanguage(
+                      source: 'Indonesia',
+                      target: 'English',
+                    );
+
+                    Navigator.pop(sheetContext);
+                  },
+                ),
+              ],
+            ),
+          ),
         );
       },
     );
   }
 
-  // =====================================
-  // TOMBOL PILIH BAHASA
-  // =====================================
-  Widget _languageChoices({
-    required String selected,
-    required ValueChanged<String> onSelected,
+  Widget _languageOption({
+    required String title,
+    required bool selected,
+    required VoidCallback onTap,
   }) {
-    const languages = [
-      'English',
-      'Indonesia',
-    ];
-
-    return Row(
-      children: languages.map((language) {
-        final active = selected == language;
-
-        return Expanded(
-          child: Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: InkWell(
-              onTap: () => onSelected(language),
-              borderRadius: BorderRadius.circular(14),
-              child: Container(
-                height: 49,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: active ? const Color(0xFFE9EEFF) : Colors.white,
-                  border: Border.all(
-                    color: active ? primary : const Color(0xFFDDE3F0),
-                    width: active ? 1.5 : 1,
-                  ),
-                  borderRadius: BorderRadius.circular(14),
-                ),
+    return Material(
+      color:
+          selected ? primary.withValues(alpha: 0.24) : const Color(0xFF2B3045),
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: 17,
+            vertical: 17,
+          ),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: selected ? const Color(0xFF8FA0FF) : Colors.white12,
+            ),
+          ),
+          child: Row(
+            children: [
+              Expanded(
                 child: Text(
-                  language,
-                  style: TextStyle(
-                    color: active ? primary : navy,
-                    fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
-            ),
+              if (selected)
+                const Icon(
+                  Icons.check_circle_rounded,
+                  color: Color(0xFF91A1FF),
+                ),
+            ],
           ),
-        );
-      }).toList(),
+        ),
+      ),
     );
   }
 
-  // =====================================
-  // GLASS LANGUAGE BAR
-  // =====================================
-  Widget _glassLanguageBar() {
+  // ========================================
+  // PEMILIH BAHASA GLASS
+  // TANPA GARIS PEMISAH
+  // ========================================
+
+  Widget _buildGlassLanguagePicker() {
     return ClipRRect(
-      borderRadius: BorderRadius.circular(18),
+      borderRadius: BorderRadius.circular(28),
       child: BackdropFilter(
         filter: ImageFilter.blur(
           sigmaX: 15,
           sigmaY: 15,
         ),
         child: Container(
-          height: 46,
-          padding: const EdgeInsets.symmetric(
-            horizontal: 8,
-          ),
+          height: 49,
           decoration: BoxDecoration(
-            color: Colors.white.withValues(
-              alpha: 0.16,
+            color: glassColor.withValues(
+              alpha: 0.43,
             ),
+            borderRadius: BorderRadius.circular(28),
             border: Border.all(
               color: Colors.white.withValues(
-                alpha: 0.25,
+                alpha: 0.28,
               ),
+              width: 1,
             ),
-            borderRadius: BorderRadius.circular(18),
           ),
           child: Row(
             children: [
-              // KLIK UNTUK MEMILIH BAHASA
               Expanded(
-                child: InkWell(
-                  onTap: _showLanguageSheet,
-                  borderRadius: BorderRadius.circular(12),
-                  child: Center(
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Text(
-                        '$_fromLanguage  →  $_toLanguage',
-                        maxLines: 1,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _showLanguagePicker,
+                    child: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 9,
+                        ),
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            '$_sourceLanguage  →  $_targetLanguage',
+                            maxLines: 1,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -420,21 +373,20 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                 ),
               ),
 
-              const SizedBox(width: 3),
-
-              // TUKAR BAHASA
+              // Tombol tukar bahasa.
+              // Tidak ada garis pemisah.
               IconButton(
                 tooltip: 'Tukar bahasa',
-                onPressed: _swapLanguage,
-                constraints: const BoxConstraints(
-                  minWidth: 34,
-                  minHeight: 34,
-                ),
+                onPressed: _busy || _closing ? null : _swapLanguage,
                 padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(
+                  minWidth: 42,
+                  minHeight: 42,
+                ),
                 icon: const Icon(
                   Icons.swap_horiz_rounded,
                   color: Colors.white,
-                  size: 21,
+                  size: 23,
                 ),
               ),
             ],
@@ -444,46 +396,118 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
     );
   }
 
-  // =====================================
-  // ZOOM
-  // =====================================
-  Future<void> _setZoom(double value) async {
-    final controller = _controller;
+  // ========================================
+  // TOMBOL BULAT GLASS
+  // UNTUK KEMBALI DAN FLASH
+  // ========================================
 
-    if (controller == null || !controller.value.isInitialized || _busy) {
-      return;
-    }
-
-    final newZoom = value
-        .clamp(
-          _minZoom,
-          _maxZoom,
-        )
-        .toDouble();
-
-    setState(() => _zoom = newZoom);
-
-    try {
-      await controller.setZoomLevel(newZoom);
-    } catch (_) {
-      // Zoom mungkin tidak didukung.
-    }
+  Widget _glassCircleButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback? onTap,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: ClipOval(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(
+            sigmaX: 15,
+            sigmaY: 15,
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onTap,
+              customBorder: const CircleBorder(),
+              child: Container(
+                width: 49,
+                height: 49,
+                decoration: BoxDecoration(
+                  color: glassColor.withValues(
+                    alpha: 0.43,
+                  ),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Colors.white.withValues(
+                      alpha: 0.28,
+                    ),
+                    width: 1,
+                  ),
+                ),
+                child: Center(
+                  child: Icon(
+                    icon,
+                    color: onTap == null ? Colors.white54 : Colors.white,
+                    size: 23,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
-  // =====================================
-  // FLASH
-  // =====================================
+  // ========================================
+  // HEADER FULLSCREEN GLASS
+  // ========================================
+
+  Widget _buildHeader() {
+    return Row(
+      children: [
+        // Tombol kembali.
+        _glassCircleButton(
+          icon: Icons.arrow_back_rounded,
+          tooltip: 'Kembali',
+          onTap: _busy || _closing
+              ? null
+              : () {
+                  unawaited(_close(null));
+                },
+        ),
+
+        const SizedBox(width: 9),
+
+        // Pemilih bahasa.
+        Expanded(
+          child: _buildGlassLanguagePicker(),
+        ),
+
+        const SizedBox(width: 9),
+
+        // Tombol flash.
+        _glassCircleButton(
+          icon: _flashOn ? Icons.flash_on_rounded : Icons.flash_off_rounded,
+          tooltip: _flashOn ? 'Matikan flash' : 'Nyalakan flash',
+          onTap: _ready && !_busy && !_changingFlash && !_closing
+              ? () {
+                  unawaited(_toggleFlash());
+                }
+              : null,
+        ),
+      ],
+    );
+  }
+
+  // ========================================
+  // MENYALAKAN / MEMATIKAN FLASH
+  // ========================================
+
   Future<void> _toggleFlash() async {
     final controller = _controller;
 
     if (controller == null ||
         !controller.value.isInitialized ||
         _busy ||
-        _changingFlash) {
+        _changingFlash ||
+        _closing) {
       return;
     }
 
-    setState(() => _changingFlash = true);
+    setState(() {
+      _changingFlash = true;
+    });
 
     try {
       final turnOn = !_flashOn;
@@ -492,174 +516,112 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
         turnOn ? FlashMode.torch : FlashMode.off,
       );
 
-      if (!mounted) return;
+      if (!mounted || _closing) return;
 
-      setState(() => _flashOn = turnOn);
+      setState(() {
+        _flashOn = turnOn;
+      });
     } catch (_) {
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Flash tidak tersedia pada kamera ini.',
+      if (mounted && !_closing) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Flash tidak tersedia pada kamera ini.',
+            ),
           ),
-        ),
-      );
+        );
+      }
     } finally {
-      if (mounted) {
-        setState(() => _changingFlash = false);
+      if (mounted && !_closing) {
+        setState(() {
+          _changingFlash = false;
+        });
       }
     }
   }
 
-  Future<void> _turnOffFlash() async {
+  // ========================================
+  // MENGATUR ZOOM
+  // ========================================
+
+  void _changeZoom(double value) {
     final controller = _controller;
 
-    if (controller == null || !controller.value.isInitialized || !_flashOn) {
+    if (controller == null ||
+        !controller.value.isInitialized ||
+        _busy ||
+        _closing) {
       return;
     }
 
-    try {
-      await controller.setFlashMode(FlashMode.off);
-      _flashOn = false;
-    } catch (_) {
-      // Kamera akan dilepas saat keluar.
+    final next = value.clamp(_minZoom, _maxZoom).toDouble();
+
+    setState(() {
+      _zoom = next;
+    });
+
+    unawaited(
+      controller.setZoomLevel(next).catchError(
+        (Object error) {
+          // Abaikan perubahan zoom yang sudah
+          // tidak berlaku ketika kamera ditutup.
+        },
+      ),
+    );
+  }
+
+  // ========================================
+  // MENGHENTIKAN KAMERA
+  // ========================================
+
+  Future<void> _releaseCamera() async {
+    final controller = _controller;
+
+    _controller = null;
+
+    if (controller != null) {
+      try {
+        await controller.setFlashMode(
+          FlashMode.off,
+        );
+      } catch (_) {}
+
+      try {
+        await controller.dispose();
+      } catch (_) {}
     }
   }
 
-  // =====================================
-  // TOMBOL KEMBALI
-  // =====================================
-  Future<void> _goBack() async {
-    if (_busy || _changingFlash) return;
+  // ========================================
+  // KEMBALI DARI MODE FULLSCREEN
+  // ========================================
 
-    await _turnOffFlash();
+  Future<void> _close(String? result) async {
+    if (_closing) return;
+
+    _closing = true;
+
+    // Lepaskan kamera fullscreen sebelum
+    // halaman real-time aktif kembali.
+    await _releaseCamera();
 
     if (!mounted) return;
 
-    Navigator.pop(context);
+    Navigator.of(context).pop(result);
   }
 
-  // =====================================
-  // HILANGKAN PETUNJUK BINGKAI
-  // =====================================
-  void _hideFrameHint() {
-    if (!_showFrameHint || !mounted) return;
+  // ========================================
+  // OCR FOTO KAMERA
+  // ========================================
 
-    setState(() {
-      _showFrameHint = false;
-    });
-  }
-
-  // =====================================
-  // ATUR BINGKAI SCANNER
-  // =====================================
-  void _adjustFrame(
-    Offset delta,
-    Size screenSize,
-    _FrameHandle handle,
-  ) {
-    final bounds = Rect.fromLTRB(
-      16,
-      screenSize.height * 0.17,
-      screenSize.width - 16,
-      screenSize.height * 0.77,
-    );
-
-    final current = Rect.fromLTRB(
-      _scanFrame.left * screenSize.width,
-      _scanFrame.top * screenSize.height,
-      _scanFrame.right * screenSize.width,
-      _scanFrame.bottom * screenSize.height,
-    );
-
-    double left = current.left;
-    double top = current.top;
-    double right = current.right;
-    double bottom = current.bottom;
-
-    const double minWidth = 130;
-    const double minHeight = 110;
-
-    if (handle == _FrameHandle.move) {
-      final dx = delta.dx
-          .clamp(
-            bounds.left - left,
-            bounds.right - right,
-          )
-          .toDouble();
-
-      final dy = delta.dy
-          .clamp(
-            bounds.top - top,
-            bounds.bottom - bottom,
-          )
-          .toDouble();
-
-      left += dx;
-      right += dx;
-      top += dy;
-      bottom += dy;
-    } else {
-      if (handle == _FrameHandle.topLeft || handle == _FrameHandle.bottomLeft) {
-        left = (left + delta.dx)
-            .clamp(
-              bounds.left,
-              right - minWidth,
-            )
-            .toDouble();
-      }
-
-      if (handle == _FrameHandle.topRight ||
-          handle == _FrameHandle.bottomRight) {
-        right = (right + delta.dx)
-            .clamp(
-              left + minWidth,
-              bounds.right,
-            )
-            .toDouble();
-      }
-
-      if (handle == _FrameHandle.topLeft || handle == _FrameHandle.topRight) {
-        top = (top + delta.dy)
-            .clamp(
-              bounds.top,
-              bottom - minHeight,
-            )
-            .toDouble();
-      }
-
-      if (handle == _FrameHandle.bottomLeft ||
-          handle == _FrameHandle.bottomRight) {
-        bottom = (bottom + delta.dy)
-            .clamp(
-              top + minHeight,
-              bounds.bottom,
-            )
-            .toDouble();
-      }
-    }
-
-    setState(() {
-      _scanFrame = Rect.fromLTRB(
-        left / screenSize.width,
-        top / screenSize.height,
-        right / screenSize.width,
-        bottom / screenSize.height,
-      );
-    });
-  }
-
-  // =====================================
-  // MEMOTRET DAN MEMBACA OCR
-  // =====================================
   Future<void> _capture() async {
     final controller = _controller;
 
     if (controller == null ||
         !controller.value.isInitialized ||
         _busy ||
-        _changingFlash) {
+        _changingFlash ||
+        _closing) {
       return;
     }
 
@@ -672,8 +634,6 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
       script: TextRecognitionScript.latin,
     );
 
-    String scannedText = '';
-
     try {
       final photo = await controller.takePicture();
 
@@ -681,271 +641,218 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
         InputImage.fromFilePath(photo.path),
       );
 
-      scannedText = result.text.trim();
-    } catch (_) {
+      final scannedText = result.text.trim();
+
       if (!mounted) return;
 
-      setState(() {
-        _busy = false;
-        _error = 'Gagal membaca teks. Coba lagi.';
-      });
-      return;
+      if (scannedText.isEmpty) {
+        setState(() {
+          _error = 'Tidak ada teks terdeteksi. '
+              'Arahkan kamera lebih dekat.';
+        });
+      } else {
+        await _close(scannedText);
+      }
+    } catch (_) {
+      if (mounted && !_closing) {
+        setState(() {
+          _error = 'Gagal membaca teks. Coba lagi.';
+        });
+      }
     } finally {
       await recognizer.close();
+
+      if (mounted && !_closing) {
+        setState(() {
+          _busy = false;
+        });
+      }
     }
-
-    if (!mounted) return;
-
-    if (scannedText.isEmpty) {
-      setState(() {
-        _busy = false;
-        _error = 'Tidak ada teks terbaca. Dekatkan kamera.';
-      });
-      return;
-    }
-
-    await _turnOffFlash();
-
-    if (!mounted) return;
-
-    // KEMBALIKAN STRING AGAR KOMPATIBEL
-    // DENGAN HALAMAN OCR REVIEW
-    Navigator.pop(context, scannedText);
   }
 
-  @override
-  void dispose() {
-    _controller?.dispose();
-    super.dispose();
+  // ========================================
+  // MENGGESER SELURUH BINGKAI
+  // ========================================
+
+  void _moveFrame(Offset delta, Size size) {
+    final dx = delta.dx / size.width;
+    final dy = delta.dy / size.height;
+
+    final frameWidth = _right - _left;
+    final frameHeight = _bottom - _top;
+
+    final newLeft = (_left + dx).clamp(0.05, 0.95 - frameWidth).toDouble();
+
+    final newTop = (_top + dy).clamp(0.10, 0.90 - frameHeight).toDouble();
+
+    setState(() {
+      _left = newLeft;
+      _top = newTop;
+      _right = newLeft + frameWidth;
+      _bottom = newTop + frameHeight;
+      _showHint = false;
+    });
   }
 
-  // =====================================
-  // TAMPILAN KAMERA UTAMA
-  // =====================================
-  @override
-  Widget build(BuildContext context) {
-    final controller = _controller;
+  // ========================================
+  // MENGUBAH UKURAN BINGKAI
+  // ========================================
 
-    final cameraReady = controller != null && controller.value.isInitialized;
+  void _resizeFrame(
+    _FrameCorner corner,
+    Offset delta,
+    Size size,
+  ) {
+    final dx = delta.dx / size.width;
+    final dy = delta.dy / size.height;
 
-    return Scaffold(
-      backgroundColor: navy,
-      body: LayoutBuilder(
+    setState(() {
+      switch (corner) {
+        case _FrameCorner.topLeft:
+          _left = (_left + dx).clamp(0.05, _right - 0.26).toDouble();
+
+          _top = (_top + dy).clamp(0.10, _bottom - 0.18).toDouble();
+          break;
+
+        case _FrameCorner.topRight:
+          _right = (_right + dx).clamp(_left + 0.26, 0.95).toDouble();
+
+          _top = (_top + dy).clamp(0.10, _bottom - 0.18).toDouble();
+          break;
+
+        case _FrameCorner.bottomLeft:
+          _left = (_left + dx).clamp(0.05, _right - 0.26).toDouble();
+
+          _bottom = (_bottom + dy).clamp(_top + 0.18, 0.90).toDouble();
+          break;
+
+        case _FrameCorner.bottomRight:
+          _right = (_right + dx).clamp(_left + 0.26, 0.95).toDouble();
+
+          _bottom = (_bottom + dy).clamp(_top + 0.18, 0.90).toDouble();
+          break;
+      }
+
+      _showHint = false;
+    });
+  }
+
+  // ========================================
+  // AREA SENTUH PADA SUDUT
+  // ========================================
+
+  Widget _cornerHandle({
+    required Offset position,
+    required Size screenSize,
+    required _FrameCorner corner,
+  }) {
+    return Positioned(
+      left: position.dx - 28,
+      top: position.dy - 28,
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onPanUpdate: (details) {
+          _resizeFrame(
+            corner,
+            details.delta,
+            screenSize,
+          );
+        },
+        child: const SizedBox(
+          width: 56,
+          height: 56,
+        ),
+      ),
+    );
+  }
+
+  // ========================================
+  // BINGKAI SCAN YANG BISA DIGESER
+  // ========================================
+
+  Widget _buildAdjustableFrame() {
+    return Positioned.fill(
+      child: LayoutBuilder(
         builder: (context, constraints) {
           final screenSize = Size(
             constraints.maxWidth,
             constraints.maxHeight,
           );
 
+          final left = _left * screenSize.width;
+          final top = _top * screenSize.height;
+          final right = _right * screenSize.width;
+          final bottom = _bottom * screenSize.height;
+
           return Stack(
             children: [
-              // ==============================
-              // PREVIEW KAMERA
-              // ==============================
-              if (cameraReady)
-                Positioned.fill(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onScaleStart: (_) {
-                      _zoomAtScaleStart = _zoom;
-                    },
-                    onScaleUpdate: (details) {
-                      if (details.pointerCount >= 2) {
-                        _setZoom(
-                          _zoomAtScaleStart * details.scale,
-                        );
-                      }
-                    },
-                    child: FittedBox(
-                      fit: BoxFit.cover,
-                      child: SizedBox(
-                        width: controller.value.previewSize?.height ?? 1,
-                        height: controller.value.previewSize?.width ?? 1,
-                        child: CameraPreview(controller),
-                      ),
-                    ),
-                  ),
-                )
-              else if (_error == null)
-                const Center(
-                  child: CircularProgressIndicator(
-                    color: primary,
-                  ),
-                ),
-
-              // ==============================
-              // BINGKAI FLEKSIBEL
-              // ==============================
-              if (cameraReady)
-                Positioned.fill(
-                  child: _buildAdjustableFrame(screenSize),
-                ),
-
-              // ==============================
-              // KONTROL ATAS DAN BAWAH
-              // ==============================
-              SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    20,
-                    14,
-                    20,
-                    18,
-                  ),
-                  child: Column(
-                    children: [
-                      // HEADER GLASS
-                      Row(
-                        children: [
-                          _headerButton(
-                            icon: Icons.arrow_back_rounded,
-                            tooltip: 'Kembali',
-                            onPressed: _busy || _changingFlash ? null : _goBack,
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: _glassLanguageBar(),
-                          ),
-                          const SizedBox(width: 10),
-                          _headerButton(
-                            icon: _flashOn
-                                ? Icons.flash_on_rounded
-                                : Icons.flash_off_rounded,
-                            tooltip:
-                                _flashOn ? 'Matikan Flash' : 'Nyalakan Flash',
-                            backgroundColor:
-                                _flashOn ? primary : Colors.black54,
-                            onPressed: cameraReady && !_busy && !_changingFlash
-                                ? _toggleFlash
-                                : null,
-                          ),
-                        ],
-                      ),
-
-                      const Spacer(),
-
-                      // PESAN ERROR
-                      if (_error != null) ...[
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: const Color(
-                              0xFFE45E73,
-                            ),
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: Text(
-                            _error!,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 15),
-                      ],
-
-                      // ==============================
-                      // ZOOM TANPA IKON TAMBAHAN
-                      // ==============================
-                      if (cameraReady && _maxZoom > _minZoom)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 8,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.black54,
-                            borderRadius: BorderRadius.circular(22),
-                          ),
-                          child: Row(
-                            children: [
-                              SizedBox(
-                                width: 52,
-                                child: Text(
-                                  '${_zoom.toStringAsFixed(1)}x',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                              Expanded(
-                                child: Slider(
-                                  min: _minZoom,
-                                  max: _maxZoom,
-                                  value: _zoom
-                                      .clamp(
-                                        _minZoom,
-                                        _maxZoom,
-                                      )
-                                      .toDouble(),
-                                  activeColor: primary,
-                                  inactiveColor: Colors.white38,
-                                  onChanged: _busy ? null : _setZoom,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-
-                      const SizedBox(height: 16),
-
-                      // ==============================
-                      // TOMBOL PINDAI
-                      // ==============================
-                      GestureDetector(
-                        onTap: cameraReady && !_busy && !_changingFlash
-                            ? _capture
-                            : null,
-                        child: Container(
-                          width: 84,
-                          height: 84,
-                          padding: const EdgeInsets.all(7),
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: primary,
-                              width: 3,
-                            ),
-                          ),
-                          child: Container(
-                            decoration: const BoxDecoration(
-                              color: primary,
-                              shape: BoxShape.circle,
-                            ),
-                            child: _busy
-                                ? const Padding(
-                                    padding: EdgeInsets.all(20),
-                                    child: CircularProgressIndicator(
-                                      color: Colors.white,
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Icon(
-                                    Icons.camera_alt_rounded,
-                                    color: Colors.white,
-                                    size: 30,
-                                  ),
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(height: 12),
-
-                      Text(
-                        _busy ? 'Membaca teks...' : 'Ketuk untuk memindai',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ],
+              Positioned(
+                left: left,
+                top: top,
+                width: right - left,
+                height: bottom - top,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onPanUpdate: (details) {
+                    _moveFrame(
+                      details.delta,
+                      screenSize,
+                    );
+                  },
+                  child: CustomPaint(
+                    painter: _CameraCornersPainter(),
                   ),
                 ),
               ),
+              _cornerHandle(
+                position: Offset(left, top),
+                screenSize: screenSize,
+                corner: _FrameCorner.topLeft,
+              ),
+              _cornerHandle(
+                position: Offset(right, top),
+                screenSize: screenSize,
+                corner: _FrameCorner.topRight,
+              ),
+              _cornerHandle(
+                position: Offset(left, bottom),
+                screenSize: screenSize,
+                corner: _FrameCorner.bottomLeft,
+              ),
+              _cornerHandle(
+                position: Offset(right, bottom),
+                screenSize: screenSize,
+                corner: _FrameCorner.bottomRight,
+              ),
+              if (_showHint)
+                Positioned(
+                  top: (top + bottom) / 2 - 18,
+                  left: 0,
+                  right: 0,
+                  child: IgnorePointer(
+                    child: Center(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(
+                            alpha: 0.55,
+                          ),
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        child: const Text(
+                          'Geser bingkai • Tarik sudut',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           );
         },
@@ -953,156 +860,249 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
     );
   }
 
-  // =====================================
-  // BINGKAI SCANNER YANG BISA DIGESER
-  // =====================================
-  Widget _buildAdjustableFrame(
-    Size screenSize,
-  ) {
-    final frame = Rect.fromLTRB(
-      _scanFrame.left * screenSize.width,
-      _scanFrame.top * screenSize.height,
-      _scanFrame.right * screenSize.width,
-      _scanFrame.bottom * screenSize.height,
-    );
+  // ========================================
+  // KAMERA FULLSCREEN REAL-TIME
+  // ========================================
 
-    return Stack(
-      children: [
-        Positioned.fromRect(
-          rect: frame,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onPanDown: (_) => _hideFrameHint(),
-            onTapDown: (_) => _hideFrameHint(),
-            onPanUpdate: (details) {
-              _adjustFrame(
-                details.delta,
-                screenSize,
-                _FrameHandle.move,
-              );
-            },
-            child: CustomPaint(
-              painter: _CameraCornerPainter(),
-              child: IgnorePointer(
-                child: AnimatedOpacity(
-                  opacity: _showFrameHint ? 1.0 : 0.0,
-                  duration: const Duration(
-                    milliseconds: 220,
-                  ),
-                  child: Center(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black45,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: const Text(
-                        'Geser bingkai • Tarik sudut',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 11,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
+  Widget _buildPreview() {
+    final controller = _controller;
+
+    if (controller == null || !controller.value.isInitialized) {
+      return const ColoredBox(
+        color: navy,
+        child: Center(
+          child: CircularProgressIndicator(
+            color: primary,
+          ),
+        ),
+      );
+    }
+
+    final previewSize = controller.value.previewSize;
+
+    if (previewSize == null) {
+      return CameraPreview(controller);
+    }
+
+    return FittedBox(
+      fit: BoxFit.cover,
+      child: SizedBox(
+        width: previewSize.height,
+        height: previewSize.width,
+        child: CameraPreview(controller),
+      ),
+    );
+  }
+
+  // ========================================
+  // SLIDER ZOOM
+  // ========================================
+
+  Widget _buildZoom() {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: 10,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(
+          alpha: 0.60,
+        ),
+        borderRadius: BorderRadius.circular(19),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 58,
+            child: Text(
+              '${_zoom.toStringAsFixed(1)}x',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
               ),
             ),
           ),
+          Expanded(
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                activeTrackColor: primary,
+                inactiveTrackColor: Colors.white30,
+                thumbColor: primary,
+              ),
+              child: Slider(
+                min: _minZoom,
+                max: _maxZoom > _minZoom ? _maxZoom : _minZoom + 1,
+                value: _zoom,
+                onChanged: _ready && !_busy && _maxZoom > _minZoom
+                    ? _changeZoom
+                    : null,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ========================================
+  // TOMBOL PINDAI
+  // ========================================
+
+  Widget _buildCaptureButton() {
+    return Column(
+      children: [
+        InkWell(
+          onTap: _ready && !_busy && !_closing
+              ? () {
+                  unawaited(_capture());
+                }
+              : null,
+          customBorder: const CircleBorder(),
+          child: Container(
+            width: 88,
+            height: 88,
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: primary,
+                width: 3,
+              ),
+            ),
+            child: Container(
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: primary,
+              ),
+              child: _busy
+                  ? const Padding(
+                      padding: EdgeInsets.all(21),
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : const Icon(
+                      Icons.camera_alt_rounded,
+                      color: Colors.white,
+                      size: 31,
+                    ),
+            ),
+          ),
         ),
-        _cornerHandle(
-          x: frame.left,
-          y: frame.top,
-          screenSize: screenSize,
-          handle: _FrameHandle.topLeft,
-        ),
-        _cornerHandle(
-          x: frame.right,
-          y: frame.top,
-          screenSize: screenSize,
-          handle: _FrameHandle.topRight,
-        ),
-        _cornerHandle(
-          x: frame.left,
-          y: frame.bottom,
-          screenSize: screenSize,
-          handle: _FrameHandle.bottomLeft,
-        ),
-        _cornerHandle(
-          x: frame.right,
-          y: frame.bottom,
-          screenSize: screenSize,
-          handle: _FrameHandle.bottomRight,
+        const SizedBox(height: 14),
+        Text(
+          _busy ? 'Membaca teks...' : 'Ketuk untuk memindai',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 14,
+          ),
         ),
       ],
     );
   }
 
-  // =====================================
-  // AREA SENTUH SUDUT TRANSPARAN
-  // =====================================
-  Widget _cornerHandle({
-    required double x,
-    required double y,
-    required Size screenSize,
-    required _FrameHandle handle,
-  }) {
-    return Positioned(
-      left: x - 24,
-      top: y - 24,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onPanDown: (_) => _hideFrameHint(),
-        onTapDown: (_) => _hideFrameHint(),
-        onPanUpdate: (details) {
-          _adjustFrame(
-            details.delta,
-            screenSize,
-            handle,
-          );
-        },
-        child: const SizedBox(
-          width: 48,
-          height: 48,
-        ),
+  // ========================================
+  // HALAMAN FULLSCREEN
+  // ========================================
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: navy,
+      body: Stack(
+        children: [
+          // Kamera memenuhi layar.
+          Positioned.fill(
+            child: _buildPreview(),
+          ),
+
+          // Pinch zoom.
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onScaleStart: (_) {
+                _pinchStartZoom = _zoom;
+              },
+              onScaleUpdate: (details) {
+                if (details.pointerCount >= 2) {
+                  _changeZoom(
+                    _pinchStartZoom * details.scale,
+                  );
+                }
+              },
+              child: const SizedBox.expand(),
+            ),
+          ),
+
+          // Bingkai scan.
+          if (_ready) _buildAdjustableFrame(),
+
+          // Header dan tombol bawah.
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(
+                18,
+                16,
+                18,
+                22,
+              ),
+              child: Column(
+                children: [
+                  _buildHeader(),
+                  const Spacer(),
+                  if (_error != null) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFBC4057),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Text(
+                        _error!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                  ],
+                  _buildZoom(),
+                  const SizedBox(height: 24),
+                  _buildCaptureButton(),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  // =====================================
-  // TOMBOL KEMBALI DAN FLASH
-  // =====================================
-  Widget _headerButton({
-    required IconData icon,
-    required String tooltip,
-    required VoidCallback? onPressed,
-    Color backgroundColor = Colors.black54,
-  }) {
-    return IconButton(
-      tooltip: tooltip,
-      onPressed: onPressed,
-      style: IconButton.styleFrom(
-        backgroundColor: backgroundColor,
-        disabledBackgroundColor: Colors.black26,
-        minimumSize: const Size(46, 46),
-      ),
-      icon: Icon(
-        icon,
-        color: Colors.white,
-        size: 23,
-      ),
-    );
+  @override
+  void dispose() {
+    _closing = true;
+
+    final controller = _controller;
+    _controller = null;
+
+    if (controller != null) {
+      unawaited(controller.dispose());
+    }
+
+    super.dispose();
   }
 }
 
-// =====================================
-// GARIS SCANNER EMPAT SUDUT
-// =====================================
-class _CameraCornerPainter extends CustomPainter {
+// ==========================================
+// PAINTER EMPAT SUDUT BINGKAI
+// ==========================================
+
+class _CameraCornersPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
@@ -1112,24 +1112,31 @@ class _CameraCornerPainter extends CustomPainter {
       ..style = PaintingStyle.stroke;
 
     const double length = 34;
-    const double radius = 12;
+    const double radius = 13;
 
     final w = size.width;
     final h = size.height;
 
     final path = Path()
+      // Kiri atas.
       ..moveTo(0, length)
       ..lineTo(0, radius)
       ..quadraticBezierTo(0, 0, radius, 0)
       ..lineTo(length, 0)
+
+      // Kanan atas.
       ..moveTo(w - length, 0)
       ..lineTo(w - radius, 0)
       ..quadraticBezierTo(w, 0, w, radius)
       ..lineTo(w, length)
+
+      // Kiri bawah.
       ..moveTo(0, h - length)
       ..lineTo(0, h - radius)
       ..quadraticBezierTo(0, h, radius, h)
       ..lineTo(length, h)
+
+      // Kanan bawah.
       ..moveTo(w - length, h)
       ..lineTo(w - radius, h)
       ..quadraticBezierTo(w, h, w, h - radius)
