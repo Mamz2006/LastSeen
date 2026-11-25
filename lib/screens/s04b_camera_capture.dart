@@ -7,7 +7,7 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 
 // ==========================================
 // LASTSEEN - FULLSCREEN CAMERA
-// GLASS UI + SMOOTH PINCH ZOOM
+// MINI GLASS ZOOM + SAFE CAMERA EXIT
 // ==========================================
 
 class S04BCameraCapture extends StatefulWidget {
@@ -34,7 +34,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   static const Color glassColor = Color(0xFF454B61);
 
   // ========================================
-  // CAMERA CONTROLLER
+  // CAMERA
   // ========================================
 
   CameraController? _controller;
@@ -56,27 +56,25 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   String _targetLanguage = 'Indonesia';
 
   // ========================================
-  // PINCH ZOOM
+  // ZOOM
   // ========================================
 
   double _minZoom = 1.0;
   double _maxZoom = 1.0;
   double _zoom = 1.0;
 
-  double _pinchStartZoom = 1.0;
-  double? _pinchStartDistance;
+  // Mini Zoom Glass.
+  bool _zoomPanelOpen = false;
+  bool _zoomDragging = false;
 
-  final Map<int, Offset> _touchPoints = {};
+  Timer? _zoomHideTimer;
 
-  // Menyimpan permintaan zoom terbaru.
-  double? _pendingZoom;
-
-  // Hanya satu proses pengiriman zoom
-  // ke kamera yang berjalan bersamaan.
-  Future<void>? _zoomTask;
+  // Menyimpan operasi zoom yang masih
+  // berlangsung sebelum kamera ditutup.
+  final Set<Future<void>> _zoomOperations = {};
 
   // ========================================
-  // POSISI BINGKAI SCAN
+  // BINGKAI SCAN
   // ========================================
 
   double _left = 0.09;
@@ -90,10 +88,6 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
       _controller != null &&
       _controller!.value.isInitialized;
 
-  // ========================================
-  // INISIALISASI AWAL
-  // ========================================
-
   @override
   void initState() {
     super.initState();
@@ -101,7 +95,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // MEMBUKA KAMERA BELAKANG
+  // MEMBUKA KAMERA
   // ========================================
 
   Future<void> _initializeCamera() async {
@@ -134,14 +128,14 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
         return;
       }
 
-      // Tampilkan kamera langsung setelah
-      // inisialisasi berhasil.
+      // Preview kamera langsung ditampilkan.
       setState(() {
         _controller = candidate;
         _error = null;
       });
 
-      // Siapkan zoom setelah preview tampil.
+      // Ambil batas zoom berdasarkan
+      // kemampuan kamera perangkat.
       try {
         final limits = await Future.wait<double>([
           candidate.getMinZoomLevel(),
@@ -152,11 +146,14 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
           return;
         }
 
-        final initialZoom = 1.0.clamp(limits[0], limits[1]).toDouble();
+        final minZoom = limits[0];
+        final maxZoom = limits[1];
+
+        final initialZoom = 1.0.clamp(minZoom, maxZoom).toDouble();
 
         setState(() {
-          _minZoom = limits[0];
-          _maxZoom = limits[1];
+          _minZoom = minZoom;
+          _maxZoom = maxZoom;
           _zoom = initialZoom;
         });
 
@@ -164,8 +161,8 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
           await candidate.setZoomLevel(initialZoom);
         }
       } catch (_) {
-        // Kamera tetap berjalan meskipun
-        // informasi zoom tidak tersedia.
+        // Preview tetap berjalan jika
+        // pengaturan zoom tidak tersedia.
       }
     } on CameraException catch (e) {
       if (candidate != null && !identical(_controller, candidate)) {
@@ -195,180 +192,309 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // MENGHITUNG JARAK DUA JARI
+  // MINI ZOOM GLASS
   // ========================================
 
-  double? _currentPinchDistance() {
-    if (_touchPoints.length != 2) return null;
-
-    final points = _touchPoints.values.toList();
-
-    return (points[0] - points[1]).distance;
-  }
-
-  void _resetPinchReference() {
-    final distance = _currentPinchDistance();
-
-    if (distance != null && distance > 0) {
-      _pinchStartDistance = distance;
-      _pinchStartZoom = _zoom;
-    } else {
-      _pinchStartDistance = null;
-    }
-  }
-
-  // ========================================
-  // JARI MENYENTUH LAYAR
-  // ========================================
-
-  void _onPointerDown(PointerDownEvent event) {
-    _touchPoints[event.pointer] = event.localPosition;
-
-    if (_touchPoints.length == 2) {
-      _resetPinchReference();
-    } else if (_touchPoints.length > 2) {
-      _pinchStartDistance = null;
-    }
-  }
-
-  // ========================================
-  // GESTUR CUBIT DUA JARI
-  // ========================================
-
-  void _onPointerMove(PointerMoveEvent event) {
-    if (!_touchPoints.containsKey(event.pointer)) {
-      return;
-    }
-
-    _touchPoints[event.pointer] = event.localPosition;
-
+  void _toggleZoomPanel() {
     if (!_ready || _busy) return;
 
-    // Hanya menerima tepat dua jari.
-    if (_touchPoints.length != 2) return;
+    _zoomHideTimer?.cancel();
 
-    final startDistance = _pinchStartDistance;
-    final currentDistance = _currentPinchDistance();
+    setState(() {
+      _zoomPanelOpen = !_zoomPanelOpen;
+      _zoomDragging = false;
+    });
 
-    if (startDistance == null ||
-        currentDistance == null ||
-        startDistance <= 0) {
+    if (_zoomPanelOpen) {
+      _scheduleZoomHide();
+    }
+  }
+
+  // ========================================
+  // TUTUP ZOOM SECARA OTOMATIS
+  // ========================================
+
+  void _scheduleZoomHide() {
+    _zoomHideTimer?.cancel();
+
+    if (!_zoomPanelOpen || _zoomDragging || _closing) {
       return;
     }
 
-    // Perubahan zoom mengikuti perbandingan
-    // jarak dua jari, tanpa jeda tambahan.
-    final scale = currentDistance / startDistance;
+    _zoomHideTimer = Timer(
+      const Duration(seconds: 2),
+      () {
+        if (!mounted || _closing || _zoomDragging || !_zoomPanelOpen) {
+          return;
+        }
 
-    final nextZoom = _pinchStartZoom * scale;
-
-    _changeZoom(nextZoom);
+        setState(() {
+          _zoomPanelOpen = false;
+        });
+      },
+    );
   }
 
   // ========================================
-  // JARI DIANGKAT
-  // ========================================
-
-  void _onPointerUp(PointerEvent event) {
-    _touchPoints.remove(event.pointer);
-
-    // Jika masih ada tepat dua jari,
-    // gunakan posisi saat ini sebagai
-    // awal gestur yang baru.
-    if (_touchPoints.length == 2) {
-      _resetPinchReference();
-    } else {
-      _pinchStartDistance = null;
-    }
-  }
-
-  // ========================================
-  // MENGUBAH ZOOM TANPA MEMBANGUN ULANG UI
+  // ZOOM SLIDER - METODE SEBELUMNYA
   // ========================================
 
   void _changeZoom(double value) {
-    if (!_ready || _busy || _closing || _maxZoom <= _minZoom) {
+    final controller = _controller;
+
+    if (controller == null ||
+        !controller.value.isInitialized ||
+        _busy ||
+        _closing ||
+        _maxZoom <= _minZoom) {
       return;
     }
 
     final next = value.clamp(_minZoom, _maxZoom).toDouble();
 
-    // Abaikan hanya perbedaan sangat kecil
-    // akibat perhitungan angka desimal.
-    if ((next - _zoom).abs() < 0.001) {
-      return;
-    }
+    // Perbarui angka dan posisi slider.
+    setState(() {
+      _zoom = next;
+    });
 
-    // Tidak perlu setState karena angka
-    // zoom tidak ditampilkan di layar.
-    _zoom = next;
+    // Kirim nilai secara langsung
+    // seperti slider zoom sebelumnya.
+    //
+    // Tidak menggunakan jeda 35 ms,
+    // perhitungan jarak jari, atau timer
+    // untuk mengatur frekuensi zoom.
+    final operation = controller.setZoomLevel(next).catchError((Object _) {
+      // Abaikan error jika kamera ditutup
+      // saat perubahan zoom berlangsung.
+    });
 
-    // Permintaan lama diganti oleh nilai baru.
-    _pendingZoom = next;
-
-    // Langsung proses tanpa delay 35 ms.
-    _startZoomWorker();
-  }
-
-  // ========================================
-  // MEMULAI PENGIRIMAN ZOOM
-  // ========================================
-
-  void _startZoomWorker() {
-    if (_zoomTask != null || _closing) return;
-
-    final task = _applyPendingZoom();
-    _zoomTask = task;
+    _zoomOperations.add(operation);
 
     unawaited(
-      task.whenComplete(() {
-        if (identical(_zoomTask, task)) {
-          _zoomTask = null;
-        }
-
-        // Jika masih ada perubahan terbaru,
-        // lanjutkan tanpa jeda tambahan.
-        if (_pendingZoom != null && !_closing) {
-          _startZoomWorker();
-        }
+      operation.whenComplete(() {
+        _zoomOperations.remove(operation);
       }),
     );
   }
 
   // ========================================
-  // PENGIRIMAN ZOOM KE KAMERA
+  // FORMAT ANGKA ZOOM
   // ========================================
 
-  Future<void> _applyPendingZoom() async {
-    while (!_closing) {
-      final next = _pendingZoom;
+  String _formatZoom(double zoom) {
+    return zoom.toStringAsFixed(1);
+  }
 
-      if (next == null) break;
+  // ========================================
+  // TOMBOL MINI ZOOM
+  // ========================================
 
-      // Ambil nilai paling baru.
-      _pendingZoom = null;
+  Widget _buildMiniZoomButton() {
+    return ClipRRect(
+      key: const ValueKey('miniZoom'),
+      borderRadius: BorderRadius.circular(30),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(
+          sigmaX: 15,
+          sigmaY: 15,
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: _ready ? _toggleZoomPanel : null,
+            borderRadius: BorderRadius.circular(30),
+            child: Container(
+              height: 44,
+              padding: const EdgeInsets.symmetric(
+                horizontal: 18,
+              ),
+              decoration: BoxDecoration(
+                color: glassColor.withValues(
+                  alpha: 0.43,
+                ),
+                borderRadius: BorderRadius.circular(30),
+                border: Border.all(
+                  color: Colors.white.withValues(
+                    alpha: 0.28,
+                  ),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.zoom_in_rounded,
+                    color: Colors.white,
+                    size: 19,
+                  ),
+                  const SizedBox(width: 7),
+                  Text(
+                    '${_formatZoom(_zoom)}×',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
-      final controller = _controller;
+  // ========================================
+  // SLIDER ZOOM GLASS
+  // ========================================
 
-      if (controller == null || !controller.value.isInitialized) {
-        break;
-      }
+  Widget _buildZoomSlider() {
+    final zoomReady = _ready && !_busy && _maxZoom > _minZoom;
 
-      try {
-        await controller.setZoomLevel(next);
-      } catch (_) {
-        // Jangan terus mengirim zoom
-        // jika kamera sudah tidak siap.
-        _pendingZoom = null;
-        break;
-      }
+    return ClipRRect(
+      key: const ValueKey('zoomSlider'),
+      borderRadius: BorderRadius.circular(28),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(
+          sigmaX: 15,
+          sigmaY: 15,
+        ),
+        child: Container(
+          height: 54,
+          padding: const EdgeInsets.symmetric(
+            horizontal: 12,
+          ),
+          decoration: BoxDecoration(
+            color: glassColor.withValues(
+              alpha: 0.43,
+            ),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(
+              color: Colors.white.withValues(
+                alpha: 0.28,
+              ),
+            ),
+          ),
+          child: Row(
+            children: [
+              const SizedBox(width: 6),
 
-      // Jika pengguna masih menggerakkan
-      // jari, loop langsung memproses
-      // nilai paling baru berikutnya.
-      //
-      // Tidak ada Future.delayed(35 ms).
-    }
+              // ANGKA ZOOM
+              SizedBox(
+                width: 52,
+                child: Text(
+                  '${_formatZoom(_zoom)}×',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+
+              // SLIDER ZOOM
+              Expanded(
+                child: SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    activeTrackColor: primary,
+                    inactiveTrackColor: Colors.white.withValues(
+                      alpha: 0.25,
+                    ),
+                    thumbColor: primary,
+                    overlayColor: primary.withValues(
+                      alpha: 0.15,
+                    ),
+                    trackHeight: 3.5,
+                    thumbShape: const RoundSliderThumbShape(
+                      enabledThumbRadius: 10,
+                    ),
+                  ),
+                  child: Slider(
+                    min: _minZoom,
+                    max: zoomReady ? _maxZoom : _minZoom + 1.0,
+                    value: zoomReady
+                        ? _zoom
+                            .clamp(
+                              _minZoom,
+                              _maxZoom,
+                            )
+                            .toDouble()
+                        : _minZoom,
+
+                    // Ketika pengguna mulai geser,
+                    // batalkan timer penutup.
+                    onChangeStart: zoomReady
+                        ? (_) {
+                            _zoomHideTimer?.cancel();
+
+                            _zoomDragging = true;
+                          }
+                        : null,
+
+                    // Metode slider yang sebelumnya
+                    // terasa smooth.
+                    onChanged: zoomReady ? _changeZoom : null,
+
+                    // Setelah selesai digeser,
+                    // tutup otomatis dalam 2 detik.
+                    onChangeEnd: zoomReady
+                        ? (_) {
+                            _zoomDragging = false;
+
+                            _scheduleZoomHide();
+                          }
+                        : null,
+                  ),
+                ),
+              ),
+
+              // TOMBOL TUTUP
+              IconButton(
+                tooltip: 'Tutup zoom',
+                onPressed: _toggleZoomPanel,
+                icon: const Icon(
+                  Icons.close_rounded,
+                  color: Colors.white,
+                  size: 20,
+                ),
+                constraints: const BoxConstraints(
+                  minWidth: 40,
+                  minHeight: 40,
+                ),
+                padding: EdgeInsets.zero,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ========================================
+  // TAMPILAN ZOOM MINI / TERBUKA
+  // ========================================
+
+  Widget _buildZoomControl() {
+    return SizedBox(
+      height: 54,
+      child: Center(
+        child: AnimatedSwitcher(
+          duration: const Duration(
+            milliseconds: 180,
+          ),
+          switchInCurve: Curves.easeOut,
+          switchOutCurve: Curves.easeIn,
+          child: _zoomPanelOpen
+              ? SizedBox(
+                  key: const ValueKey('openZoom'),
+                  width: double.infinity,
+                  child: _buildZoomSlider(),
+                )
+              : _buildMiniZoomButton(),
+        ),
+      ),
+    );
   }
 
   // ========================================
@@ -379,13 +505,17 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
     if (_busy || _closing) return;
 
     setState(() {
-      final old = _sourceLanguage;
+      final previous = _sourceLanguage;
+
       _sourceLanguage = _targetLanguage;
-      _targetLanguage = old;
+      _targetLanguage = previous;
     });
   }
 
-  void _changeLanguage(String source, String target) {
+  void _changeLanguage(
+    String source,
+    String target,
+  ) {
     if (_busy || _closing) return;
 
     setState(() {
@@ -460,6 +590,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                       'English',
                       'Indonesia',
                     );
+
                     Navigator.pop(sheetContext);
                   },
                 ),
@@ -472,6 +603,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                       'Indonesia',
                       'English',
                     );
+
                     Navigator.pop(sheetContext);
                   },
                 ),
@@ -522,6 +654,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                 const Icon(
                   Icons.check_circle_rounded,
                   color: Color(0xFF91A1FF),
+                  size: 23,
                 ),
             ],
           ),
@@ -531,7 +664,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // PEMILIH BAHASA GLASS
+  // GLASS LANGUAGE PICKER
   // ========================================
 
   Widget _buildGlassLanguagePicker() {
@@ -545,10 +678,14 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
         child: Container(
           height: 49,
           decoration: BoxDecoration(
-            color: glassColor.withValues(alpha: 0.43),
+            color: glassColor.withValues(
+              alpha: 0.43,
+            ),
             borderRadius: BorderRadius.circular(28),
             border: Border.all(
-              color: Colors.white.withValues(alpha: 0.28),
+              color: Colors.white.withValues(
+                alpha: 0.28,
+              ),
             ),
           ),
           child: Row(
@@ -560,7 +697,9 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                     onTap: _showLanguagePicker,
                     child: Center(
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                        ),
                         child: FittedBox(
                           fit: BoxFit.scaleDown,
                           child: Text(
@@ -600,7 +739,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // TOMBOL BULAT GLASS
+  // TOMBOL GLASS BULAT
   // ========================================
 
   Widget _glassCircleButton({
@@ -625,7 +764,9 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                 width: 49,
                 height: 49,
                 decoration: BoxDecoration(
-                  color: glassColor.withValues(alpha: 0.43),
+                  color: glassColor.withValues(
+                    alpha: 0.43,
+                  ),
                   shape: BoxShape.circle,
                   border: Border.all(
                     color: Colors.white.withValues(
@@ -647,6 +788,10 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
       ),
     );
   }
+
+  // ========================================
+  // HEADER FULLSCREEN
+  // ========================================
 
   Widget _buildHeader() {
     return Row(
@@ -693,7 +838,9 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
       return;
     }
 
-    setState(() => _changingFlash = true);
+    setState(() {
+      _changingFlash = true;
+    });
 
     try {
       final turnOn = !_flashOn;
@@ -731,13 +878,15 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   // ========================================
 
   Future<void> _releaseCamera() async {
-    _pendingZoom = null;
-    _touchPoints.clear();
-    _pinchStartDistance = null;
+    _zoomHideTimer?.cancel();
 
-    // Hilangkan preview sebelum kamera dilepas.
+    _zoomDragging = false;
+    _zoomPanelOpen = false;
+
     final controller = _controller;
 
+    // Hilangkan CameraPreview dahulu
+    // sebelum melepas CameraController.
     if (mounted) {
       setState(() {
         _controller = null;
@@ -748,8 +897,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
       _controller = null;
     }
 
-    // Tunggu inisialisasi yang mungkin
-    // masih berjalan.
+    // Pastikan proses inisialisasi selesai.
     final initialization = _initializationFuture;
 
     if (initialization != null) {
@@ -758,19 +906,21 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
       } catch (_) {}
     }
 
-    // Tunggu perintah zoom yang sedang dikirim
-    // sebelum CameraController di-dispose.
-    final zoomTask = _zoomTask;
+    // Pastikan perintah zoom sebelumnya
+    // tidak sedang memakai kamera.
+    final operations = _zoomOperations.toList();
 
-    if (zoomTask != null) {
+    if (operations.isNotEmpty) {
       try {
-        await zoomTask;
+        await Future.wait(operations);
       } catch (_) {}
     }
 
     if (controller != null) {
       try {
-        await controller.setFlashMode(FlashMode.off);
+        await controller.setFlashMode(
+          FlashMode.off,
+        );
       } catch (_) {}
 
       try {
@@ -780,7 +930,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // KEMBALI KE KAMERA REAL-TIME
+  // KEMBALI KE REAL-TIME CAMERA
   // ========================================
 
   Future<void> _close(String? result) async {
@@ -796,7 +946,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // PINDAI / OCR
+  // OCR / PINDAI TEKS
   // ========================================
 
   Future<void> _capture() async {
@@ -856,33 +1006,46 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // GESER BINGKAI DENGAN SATU JARI
+  // GESER BINGKAI SCAN
   // ========================================
 
-  void _moveFrame(Offset delta, Size size) {
-    if (_touchPoints.length >= 2) return;
-
+  void _moveFrame(
+    Offset delta,
+    Size size,
+  ) {
     final dx = delta.dx / size.width;
     final dy = delta.dy / size.height;
 
     final frameWidth = _right - _left;
     final frameHeight = _bottom - _top;
 
-    final newLeft = (_left + dx).clamp(0.05, 0.95 - frameWidth).toDouble();
+    final newLeft = (_left + dx)
+        .clamp(
+          0.05,
+          0.95 - frameWidth,
+        )
+        .toDouble();
 
-    final newTop = (_top + dy).clamp(0.10, 0.90 - frameHeight).toDouble();
+    final newTop = (_top + dy)
+        .clamp(
+          0.10,
+          0.90 - frameHeight,
+        )
+        .toDouble();
 
     setState(() {
       _left = newLeft;
       _top = newTop;
+
       _right = newLeft + frameWidth;
       _bottom = newTop + frameHeight;
+
       _showHint = false;
     });
   }
 
   // ========================================
-  // TARIK SUDUT BINGKAI
+  // UBAH UKURAN BINGKAI SCAN
   // ========================================
 
   void _resizeFrame(
@@ -890,41 +1053,83 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
     Offset delta,
     Size size,
   ) {
-    if (_touchPoints.length >= 2) return;
-
     final dx = delta.dx / size.width;
     final dy = delta.dy / size.height;
 
     setState(() {
       switch (corner) {
         case _FrameCorner.topLeft:
-          _left = (_left + dx).clamp(0.05, _right - 0.26).toDouble();
+          _left = (_left + dx)
+              .clamp(
+                0.05,
+                _right - 0.26,
+              )
+              .toDouble();
 
-          _top = (_top + dy).clamp(0.10, _bottom - 0.18).toDouble();
+          _top = (_top + dy)
+              .clamp(
+                0.10,
+                _bottom - 0.18,
+              )
+              .toDouble();
           break;
 
         case _FrameCorner.topRight:
-          _right = (_right + dx).clamp(_left + 0.26, 0.95).toDouble();
+          _right = (_right + dx)
+              .clamp(
+                _left + 0.26,
+                0.95,
+              )
+              .toDouble();
 
-          _top = (_top + dy).clamp(0.10, _bottom - 0.18).toDouble();
+          _top = (_top + dy)
+              .clamp(
+                0.10,
+                _bottom - 0.18,
+              )
+              .toDouble();
           break;
 
         case _FrameCorner.bottomLeft:
-          _left = (_left + dx).clamp(0.05, _right - 0.26).toDouble();
+          _left = (_left + dx)
+              .clamp(
+                0.05,
+                _right - 0.26,
+              )
+              .toDouble();
 
-          _bottom = (_bottom + dy).clamp(_top + 0.18, 0.90).toDouble();
+          _bottom = (_bottom + dy)
+              .clamp(
+                _top + 0.18,
+                0.90,
+              )
+              .toDouble();
           break;
 
         case _FrameCorner.bottomRight:
-          _right = (_right + dx).clamp(_left + 0.26, 0.95).toDouble();
+          _right = (_right + dx)
+              .clamp(
+                _left + 0.26,
+                0.95,
+              )
+              .toDouble();
 
-          _bottom = (_bottom + dy).clamp(_top + 0.18, 0.90).toDouble();
+          _bottom = (_bottom + dy)
+              .clamp(
+                _top + 0.18,
+                0.90,
+              )
+              .toDouble();
           break;
       }
 
       _showHint = false;
     });
   }
+
+  // ========================================
+  // HANDLE SUDUT BINGKAI
+  // ========================================
 
   Widget _cornerHandle({
     required Offset position,
@@ -1046,12 +1251,14 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // PREVIEW KAMERA
+  // CAMERA PREVIEW
   // ========================================
 
   Widget _buildPreview() {
     if (_closing) {
-      return const ColoredBox(color: navy);
+      return const ColoredBox(
+        color: navy,
+      );
     }
 
     final controller = _controller;
@@ -1079,12 +1286,14 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
       return CameraPreview(controller);
     }
 
-    return FittedBox(
-      fit: BoxFit.cover,
-      child: SizedBox(
-        width: previewSize.height,
-        height: previewSize.width,
-        child: CameraPreview(controller),
+    return ClipRect(
+      child: FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: previewSize.height,
+          height: previewSize.width,
+          child: CameraPreview(controller),
+        ),
       ),
     );
   }
@@ -1148,7 +1357,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // HALAMAN FULLSCREEN TANPA SLIDER
+  // HALAMAN FULLSCREEN
   // ========================================
 
   @override
@@ -1162,82 +1371,85 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
       },
       child: Scaffold(
         backgroundColor: navy,
-        body: Listener(
-          behavior: HitTestBehavior.translucent,
-          onPointerDown: _onPointerDown,
-          onPointerMove: _onPointerMove,
-          onPointerUp: _onPointerUp,
-          onPointerCancel: _onPointerUp,
-          child: Stack(
-            children: [
-              // PREVIEW KAMERA
-              Positioned.fill(
-                child: _buildPreview(),
-              ),
+        body: Stack(
+          children: [
+            // PREVIEW KAMERA
+            Positioned.fill(
+              child: _buildPreview(),
+            ),
 
-              // BINGKAI YANG BISA DIGESER
-              if (_ready) _buildAdjustableFrame(),
+            // BINGKAI SCAN
+            if (_ready) _buildAdjustableFrame(),
 
-              // HEADER DAN TOMBOL PINDAI
-              SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    18,
-                    16,
-                    18,
-                    22,
-                  ),
-                  child: Column(
-                    children: [
-                      _buildHeader(),
-                      const Spacer(),
-                      if (_error != null) ...[
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFBC4057),
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: Text(
-                            _error!,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
-                            ),
+            // HEADER DAN KONTROL
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  18,
+                  16,
+                  18,
+                  22,
+                ),
+                child: Column(
+                  children: [
+                    _buildHeader(),
+
+                    const Spacer(),
+
+                    if (_error != null) ...[
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFBC4057),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Text(
+                          _error!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
                           ),
                         ),
-                        const SizedBox(height: 18),
-                      ],
-                      _buildCaptureButton(),
+                      ),
+                      const SizedBox(height: 18),
                     ],
-                  ),
+
+                    // MINI ZOOM GLASS
+                    _buildZoomControl(),
+
+                    const SizedBox(height: 17),
+
+                    // TOMBOL PINDAI
+                    _buildCaptureButton(),
+                  ],
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
   }
 
   // ========================================
-  // MEMBERSIHKAN CAMERA CONTROLLER
+  // MEMBERSIHKAN RESOURCE
   // ========================================
 
   @override
   void dispose() {
     _closing = true;
 
-    _pendingZoom = null;
-    _touchPoints.clear();
+    _zoomHideTimer?.cancel();
 
     final controller = _controller;
     _controller = null;
 
     if (controller != null) {
-      unawaited(controller.dispose());
+      unawaited(
+        controller.dispose(),
+      );
     }
 
     super.dispose();
@@ -1250,7 +1462,10 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
 
 class _CameraCornersPainter extends CustomPainter {
   @override
-  void paint(Canvas canvas, Size size) {
+  void paint(
+    Canvas canvas,
+    Size size,
+  ) {
     final paint = Paint()
       ..color = const Color(0xFF8095FF)
       ..strokeWidth = 3
@@ -1264,21 +1479,48 @@ class _CameraCornersPainter extends CustomPainter {
     final h = size.height;
 
     final path = Path()
+      // KIRI ATAS
       ..moveTo(0, length)
       ..lineTo(0, radius)
-      ..quadraticBezierTo(0, 0, radius, 0)
+      ..quadraticBezierTo(
+        0,
+        0,
+        radius,
+        0,
+      )
       ..lineTo(length, 0)
+
+      // KANAN ATAS
       ..moveTo(w - length, 0)
       ..lineTo(w - radius, 0)
-      ..quadraticBezierTo(w, 0, w, radius)
+      ..quadraticBezierTo(
+        w,
+        0,
+        w,
+        radius,
+      )
       ..lineTo(w, length)
+
+      // KIRI BAWAH
       ..moveTo(0, h - length)
       ..lineTo(0, h - radius)
-      ..quadraticBezierTo(0, h, radius, h)
+      ..quadraticBezierTo(
+        0,
+        h,
+        radius,
+        h,
+      )
       ..lineTo(length, h)
+
+      // KANAN BAWAH
       ..moveTo(w - length, h)
       ..lineTo(w - radius, h)
-      ..quadraticBezierTo(w, h, w, h - radius)
+      ..quadraticBezierTo(
+        w,
+        h,
+        w,
+        h - radius,
+      )
       ..lineTo(w, h - length);
 
     canvas.drawPath(path, paint);
