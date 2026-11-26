@@ -12,11 +12,10 @@ import 's04b_camera_capture.dart';
 import 's05_ocr_review.dart';
 import 's06_import_document.dart';
 
-// ======================================================
-// LASTSEEN - SMART SCAN
-// REAL TIME CAMERA + MINI ZOOM GLASS
-// AUTO MAX ZOOM + DEBUG ZOOM LIMITS
-// ======================================================
+// ==========================================
+// LASTSEEN - SMART SCAN REAL-TIME
+// MINI ZOOM GLASS + LIVE CAMERA + OCR
+// ==========================================
 
 class S04SmartScan extends StatefulWidget {
   const S04SmartScan({super.key});
@@ -27,20 +26,21 @@ class S04SmartScan extends StatefulWidget {
 
 class _S04SmartScanState extends State<S04SmartScan>
     with WidgetsBindingObserver {
-  // ====================================================
+  // ========================================
   // WARNA
-  // ====================================================
+  // ========================================
 
-  static const Color primary = Color(0xFF4664F2);
-  static const Color purple = Color(0xFF704CF7);
-  static const Color background = Color(0xFFF5F7FD);
-  static const Color ink = Color(0xFF171C31);
-  static const Color muted = Color(0xFF8791AC);
-  static const Color navy = Color(0xFF121B35);
+  static const Color primary = Color(0xFF4361EE);
+  static const Color navy = Color(0xFF15192D);
+  static const Color background = Color(0xFFF8F9FD);
+  static const Color muted = Color(0xFF8089A1);
+  static const Color lightBlue = Color(0xFFE9EEFF);
+  static const Color glassColor = Color(0xFF454B61);
+  static const Color borderGrey = Color(0xFFDDE3F0);
 
-  // ====================================================
-  // CAMERA STATE
-  // ====================================================
+  // ========================================
+  // CAMERA
+  // ========================================
 
   CameraController? _camera;
 
@@ -59,35 +59,24 @@ class _S04SmartScanState extends State<S04SmartScan>
 
   final ImagePicker _imagePicker = ImagePicker();
 
-  // ====================================================
-  // LANGUAGE
-  // ====================================================
+  // ========================================
+  // BAHASA
+  // ========================================
 
   String _sourceLanguage = 'English';
   String _targetLanguage = 'Indonesia';
 
-  static const List<String> _languages = [
-    'English',
-    'Indonesia',
-    'Japanese',
-    'Korean',
-    'Mandarin',
-    'Spanish',
-    'French',
-    'German',
-  ];
-
-  // ====================================================
-  // ZOOM STATE
-  // ====================================================
+  // ========================================
+  // MINI ZOOM GLASS
+  // ========================================
 
   double _minZoom = 1.0;
   double _maxZoom = 1.0;
   double _zoom = 1.0;
 
   bool _zoomPanelOpen = false;
-  bool _zoomLoading = false;
   bool _zoomDragging = false;
+  bool _zoomLoading = false;
 
   String? _zoomError;
 
@@ -95,32 +84,26 @@ class _S04SmartScanState extends State<S04SmartScan>
 
   final Set<Future<void>> _zoomOperations = {};
 
-  // ====================================================
-  // GETTERS
-  // ====================================================
+  // ========================================
+  // KONDISI KAMERA
+  // ========================================
 
-  bool get _shouldRun {
-    return mounted &&
-        !_disposing &&
-        !kIsWeb &&
-        _tabVisible &&
-        _appVisible &&
-        !_suspended;
-  }
+  bool get _shouldRun =>
+      mounted &&
+      !_disposing &&
+      !kIsWeb &&
+      _tabVisible &&
+      _appVisible &&
+      !_suspended;
 
-  bool get _cameraReady {
-    final camera = _camera;
+  bool get _cameraReady =>
+      _shouldRun && _camera != null && _camera!.value.isInitialized;
 
-    return _shouldRun && camera != null && camera.value.isInitialized;
-  }
+  bool get _zoomAvailable => _cameraReady && _maxZoom > _minZoom;
 
-  bool get _zoomAvailable {
-    return _cameraReady && _maxZoom > _minZoom;
-  }
-
-  // ====================================================
+  // ========================================
   // LIFECYCLE
-  // ====================================================
+  // ========================================
 
   @override
   void initState() {
@@ -147,45 +130,31 @@ class _S04SmartScanState extends State<S04SmartScan>
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
+  void didChangeAppLifecycleState(
+    AppLifecycleState state,
+  ) {
     _appVisible = state == AppLifecycleState.resumed;
 
     _syncCamera();
   }
 
-  @override
-  void dispose() {
-    _disposing = true;
-
-    WidgetsBinding.instance.removeObserver(this);
-
-    _zoomHideTimer?.cancel();
-    _cameraVersion++;
-
-    unawaited(_releaseCamera());
-
-    super.dispose();
-  }
-
-  // ====================================================
-  // CAMERA MANAGER
-  // ====================================================
+  // ========================================
+  // MENGATUR CAMERA LIFECYCLE
+  // ========================================
 
   void _syncCamera() {
-    if (_disposing || !mounted) {
+    if (!mounted || _disposing || kIsWeb) {
       return;
     }
 
     if (!_shouldRun) {
-      unawaited(_stopCamera());
+      if (_camera != null || _starting != null) {
+        unawaited(_stopCamera());
+      }
       return;
     }
 
     if (_camera != null || _starting != null || _stopping != null) {
-      return;
-    }
-
-    if (_error != null) {
       return;
     }
 
@@ -204,114 +173,174 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
-  Future<void> _initializeCamera(int version) async {
-    CameraController? nextCamera;
+  bool _isCurrent(int version) {
+    return _shouldRun && _cameraVersion == version;
+  }
+
+  // ========================================
+  // MEMBUKA KAMERA REAL-TIME
+  // ========================================
+
+  Future<void> _initializeCamera(
+    int version,
+  ) async {
+    CameraController? candidate;
 
     try {
       final cameras = await availableCameras();
 
-      // ==============================================
-      // DEBUG: DAFTAR KAMERA YANG TERSEDIA
-      // ==============================================
-
-      debugPrint(
-        '========== LASTSEEN CAMERA DEBUG ==========',
-      );
-
-      for (final camera in cameras) {
-        debugPrint(
-          'AVAILABLE CAMERA: '
-          '${camera.name} | '
-          'LENS: ${camera.lensDirection}',
-        );
-      }
-
-      if (cameras.isEmpty) {
-        throw Exception('Kamera tidak ditemukan.');
-      }
-
-      final rearCameras = cameras.where(
-        (camera) => camera.lensDirection == CameraLensDirection.back,
-      );
-
-      final selectedCamera =
-          rearCameras.isNotEmpty ? rearCameras.first : cameras.first;
-
-      debugPrint(
-        'LASTSEEN SELECTED CAMERA: '
-        '${selectedCamera.name}',
-      );
-
-      if (!_shouldRun || version != _cameraVersion) {
+      if (!_isCurrent(version)) {
         return;
       }
 
-      nextCamera = CameraController(
-        selectedCamera,
+      if (cameras.isEmpty) {
+        throw StateError('Kamera tidak ditemukan.');
+      }
+
+      final rearCamera = cameras.firstWhere(
+        (camera) => camera.lensDirection == CameraLensDirection.back,
+        orElse: () => cameras.first,
+      );
+
+      candidate = CameraController(
+        rearCamera,
         ResolutionPreset.high,
         enableAudio: false,
       );
 
-      await nextCamera.initialize();
+      await candidate.initialize();
 
-      if (!_shouldRun || version != _cameraVersion) {
+      if (!_isCurrent(version)) {
+        await candidate.dispose();
         return;
       }
 
-      final initializedCamera = nextCamera;
-
-      if (!mounted) {
-        return;
-      }
-
+      // Preview tampil segera setelah siap.
       setState(() {
-        _camera = initializedCamera;
+        _camera = candidate;
         _error = null;
 
         _minZoom = 1.0;
         _maxZoom = 1.0;
         _zoom = 1.0;
 
-        _zoomPanelOpen = false;
         _zoomLoading = false;
         _zoomError = null;
       });
 
-      nextCamera = null;
-
-      // Ambil batas zoom dari perangkat.
+      // Membaca kemampuan zoom tanpa
+      // menahan tampilan preview.
       unawaited(_readZoomLimits());
-    } catch (error) {
-      debugPrint(
-        'LASTSEEN CAMERA ERROR: $error',
-      );
+    } on CameraException catch (e) {
+      if (candidate != null && !identical(candidate, _camera)) {
+        try {
+          await candidate.dispose();
+        } catch (_) {}
+      }
 
-      if (mounted && !_disposing && version == _cameraVersion) {
+      if (_isCurrent(version)) {
         setState(() {
-          _error = error.toString();
+          _error = e.description ?? 'Kamera gagal dibuka.';
         });
       }
-    } finally {
-      if (nextCamera != null) {
+    } catch (_) {
+      if (candidate != null && !identical(candidate, _camera)) {
         try {
-          await nextCamera.dispose();
+          await candidate.dispose();
         } catch (_) {}
+      }
+
+      if (_isCurrent(version)) {
+        setState(() {
+          _error = 'Kamera tidak dapat dibuka. '
+              'Periksa izin kamera.';
+        });
       }
     }
   }
 
-  Future<void> _stopCamera() async {
-    if (_stopping != null) {
-      return _stopping;
-    }
+  // ========================================
+  // MEMBACA BATAS ZOOM KAMERA
+  // ========================================
 
-    // Jika kamera memang sudah berhenti,
-    // tidak perlu menjalankan proses ulang.
-    if (_camera == null && _starting == null) {
+  Future<void> _readZoomLimits() async {
+    final controller = _camera;
+
+    if (controller == null ||
+        !controller.value.isInitialized ||
+        _zoomLoading ||
+        _disposing) {
       return;
     }
 
+    setState(() {
+      _zoomLoading = true;
+      _zoomError = null;
+    });
+
+    try {
+      final values = await Future.wait<double>([
+        controller.getMinZoomLevel(),
+        controller.getMaxZoomLevel(),
+      ]);
+
+      if (!mounted || _disposing || !identical(_camera, controller)) {
+        return;
+      }
+
+      final minZoom = values[0];
+      final maxZoom = values[1];
+
+      if (!minZoom.isFinite || !maxZoom.isFinite || maxZoom < minZoom) {
+        throw StateError(
+          'Batas zoom tidak valid.',
+        );
+      }
+
+      final initialZoom = _zoom.clamp(minZoom, maxZoom).toDouble();
+
+      setState(() {
+        _minZoom = minZoom;
+        _maxZoom = maxZoom;
+        _zoom = initialZoom;
+
+        _zoomLoading = false;
+
+        if (maxZoom <= minZoom) {
+          _zoomError = 'Kamera tidak menyediakan rentang zoom.';
+        }
+      });
+
+      // Jika slider sedang terbuka,
+      // mulai timer setelah zoom siap.
+      if (_zoomPanelOpen && _zoomAvailable) {
+        _scheduleZoomHide();
+      }
+    } catch (_) {
+      if (!mounted || _disposing || !identical(_camera, controller)) {
+        return;
+      }
+
+      setState(() {
+        _zoomLoading = false;
+        _zoomError = 'Batas zoom belum berhasil dibaca.';
+      });
+    }
+  }
+
+  // ========================================
+  // MENGHENTIKAN KAMERA
+  // ========================================
+
+  Future<void> _stopCamera() async {
     ++_cameraVersion;
+
+    final ongoingStop = _stopping;
+
+    if (ongoingStop != null) {
+      await ongoingStop;
+      return;
+    }
 
     final task = _releaseCamera();
 
@@ -324,12 +353,8 @@ class _S04SmartScanState extends State<S04SmartScan>
         _stopping = null;
       }
 
-      if (_shouldRun && _camera == null && _error == null) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            _syncCamera();
-          }
-        });
+      if (_shouldRun) {
+        _syncCamera();
       }
     }
   }
@@ -337,6 +362,11 @@ class _S04SmartScanState extends State<S04SmartScan>
   Future<void> _releaseCamera() async {
     _zoomHideTimer?.cancel();
 
+    _zoomPanelOpen = false;
+    _zoomDragging = false;
+
+    // Jika kamera masih dibuka,
+    // selesaikan proses tersebut dahulu.
     final starting = _starting;
 
     if (starting != null) {
@@ -345,155 +375,40 @@ class _S04SmartScanState extends State<S04SmartScan>
       } catch (_) {}
     }
 
-    final camera = _camera;
+    final controller = _camera;
 
-    if (mounted && !_disposing) {
-      setState(() {
-        _camera = null;
+    _camera = null;
+    _zoomLoading = false;
+    _zoomError = null;
 
-        _zoomPanelOpen = false;
-        _zoomDragging = false;
-        _zoomLoading = false;
-        _zoomError = null;
-      });
-    } else {
-      _camera = null;
+    if (controller != null && mounted && !_disposing) {
+      // Hilangkan CameraPreview
+      // sebelum CameraController di-dispose.
+      setState(() {});
+
+      await WidgetsBinding.instance.endOfFrame;
     }
 
-    if (camera == null) {
-      return;
-    }
+    // Tunggu zoom yang sedang berjalan.
+    final operations = _zoomOperations.toList();
 
-    // Berikan kesempatan preview lepas
-    // dari widget sebelum controller di-dispose.
-    await Future<void>.delayed(
-      const Duration(milliseconds: 32),
-    );
-
-    if (_zoomOperations.isNotEmpty) {
+    if (operations.isNotEmpty) {
       try {
-        await Future.wait(
-          _zoomOperations.toList(),
-        );
+        await Future.wait(operations);
       } catch (_) {}
     }
 
-    try {
-      await camera.dispose();
-    } catch (error) {
-      debugPrint(
-        'LASTSEEN CAMERA DISPOSE ERROR: $error',
-      );
+    if (controller != null) {
+      try {
+        await controller.dispose();
+      } catch (_) {}
     }
   }
 
-  void _retryCamera() {
-    if (_busy) {
-      return;
-    }
-
-    setState(() {
-      _error = null;
-    });
-
-    _syncCamera();
-  }
-
-  // ====================================================
-  // ZOOM LIMITS
-  //
-  // BAGIAN UTAMA YANG DITAMBAHKAN
-  // ====================================================
-
-  Future<void> _readZoomLimits() async {
-    final controller = _camera;
-
-    if (controller == null || !controller.value.isInitialized || _zoomLoading) {
-      return;
-    }
-
-    if (!mounted || _disposing) {
-      return;
-    }
-
-    setState(() {
-      _zoomLoading = true;
-      _zoomError = null;
-    });
-
-    try {
-      // Nilai langsung dari plugin kamera.
-      final values = await Future.wait<double>([
-        controller.getMinZoomLevel(),
-        controller.getMaxZoomLevel(),
-      ]);
-
-      final minZoom = values[0];
-      final maxZoom = values[1];
-
-      if (!mounted || _disposing || !identical(_camera, controller)) {
-        return;
-      }
-
-      // ==========================================
-      // DEBUG BARU:
-      // LIHAT HASILNYA DI TERMINAL VS CODE
-      // ==========================================
-
-      debugPrint(
-        '==========================================',
-      );
-
-      debugPrint(
-        'LASTSEEN CAMERA: '
-        '${controller.description.name}',
-      );
-
-      debugPrint(
-        'LASTSEEN MIN ZOOM: $minZoom',
-      );
-
-      debugPrint(
-        'LASTSEEN MAX ZOOM: $maxZoom',
-      );
-
-      debugPrint(
-        '==========================================',
-      );
-
-      // Gunakan nilai aktual dari kamera.
-      // Tidak menetapkan batas 10x atau 20x
-      // secara manual.
-      setState(() {
-        _minZoom = minZoom;
-        _maxZoom = maxZoom;
-
-        _zoom = _zoom.clamp(_minZoom, _maxZoom).toDouble();
-
-        _zoomLoading = false;
-        _zoomError = null;
-      });
-
-      if (_zoomPanelOpen && _zoomAvailable) {
-        _scheduleZoomHide();
-      }
-    } catch (error) {
-      debugPrint(
-        'LASTSEEN ZOOM ERROR: $error',
-      );
-
-      if (mounted && !_disposing && identical(_camera, controller)) {
-        setState(() {
-          _zoomLoading = false;
-          _zoomError = 'Gagal membaca batas zoom kamera.';
-        });
-      }
-    }
-  }
-
-  // ====================================================
-  // MINI ZOOM GLASS
-  // ====================================================
+  // ========================================
+  // MEMBUKA / MENUTUP MINI ZOOM GLASS
+  // PERBAIKAN UTAMA TOMBOL TIDAK RESPONS
+  // ========================================
 
   void _toggleZoomPanel() {
     if (_busy || _suspended) {
@@ -502,7 +417,7 @@ class _S04SmartScanState extends State<S04SmartScan>
 
     if (!_cameraReady) {
       _showMessage(
-        'Kamera belum siap. Tunggu preview muncul.',
+        'Kamera belum siap. Coba lagi setelah preview muncul.',
       );
       return;
     }
@@ -515,6 +430,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     });
 
     if (_zoomPanelOpen) {
+      // Panel selalu terbuka jika kamera siap.
+      // Tidak lagi diblokir oleh:
+      // _maxZoom <= _minZoom
       if (!_zoomLoading && !_zoomAvailable) {
         unawaited(_readZoomLimits());
       } else if (_zoomAvailable) {
@@ -523,83 +441,92 @@ class _S04SmartScanState extends State<S04SmartScan>
     }
   }
 
+  // ========================================
+  // TIMER MENUTUP ZOOM OTOMATIS
+  // ========================================
+
   void _scheduleZoomHide() {
     _zoomHideTimer?.cancel();
 
-    if (!_zoomPanelOpen || _zoomDragging) {
+    if (!_zoomPanelOpen || _zoomDragging || _zoomLoading || !_zoomAvailable) {
       return;
     }
 
     _zoomHideTimer = Timer(
       const Duration(seconds: 2),
       () {
-        if (!mounted || _disposing) {
+        if (!mounted || _disposing || _zoomDragging || !_zoomPanelOpen) {
           return;
         }
 
-        if (_zoomPanelOpen && !_zoomDragging) {
-          setState(() {
-            _zoomPanelOpen = false;
-          });
-        }
+        setState(() {
+          _zoomPanelOpen = false;
+        });
       },
     );
   }
 
+  // ========================================
+  // ZOOM MENGGUNAKAN SLIDER LANGSUNG
+  // ========================================
+
   void _changeZoom(double value) {
     final controller = _camera;
 
-    if (controller == null ||
-        !controller.value.isInitialized ||
-        !_zoomAvailable) {
+    if (controller == null || !_cameraReady || _busy || !_zoomAvailable) {
       return;
     }
 
-    final nextZoom = value.clamp(_minZoom, _maxZoom).toDouble();
+    final next = value.clamp(_minZoom, _maxZoom).toDouble();
 
+    // Sama seperti metode slider
+    // sebelumnya, tanpa gestur cubit.
     setState(() {
-      _zoom = nextZoom;
+      _zoom = next;
     });
 
-    final task = controller.setZoomLevel(nextZoom).catchError((Object error) {
-      debugPrint(
-        'LASTSEEN SET ZOOM ERROR: $error',
-      );
-    });
+    final Future<void> operation =
+        controller.setZoomLevel(next).catchError((Object _) {});
 
-    _zoomOperations.add(task);
+    _zoomOperations.add(operation);
 
     unawaited(
-      task.whenComplete(() {
-        _zoomOperations.remove(task);
+      operation.whenComplete(() {
+        _zoomOperations.remove(operation);
       }),
     );
   }
 
-  // ====================================================
-  // GLASS MINI ZOOM BUTTON
-  // ====================================================
+  // ========================================
+  // TOMBOL MINI ZOOM
+  // ========================================
 
   Widget _buildMiniZoomButton() {
     return ClipRRect(
-      key: const ValueKey('mini-zoom'),
-      borderRadius: BorderRadius.circular(26),
+      borderRadius: BorderRadius.circular(30),
       child: BackdropFilter(
         filter: ImageFilter.blur(
           sigmaX: 15,
           sigmaY: 15,
         ),
         child: Material(
-          color: Colors.black.withValues(alpha: 0.43),
+          color: Colors.transparent,
           child: InkWell(
+            // Tetap bisa ditekan.
+            // Fungsi akan memberikan pesan
+            // jika kamera belum siap.
             onTap: _toggleZoomPanel,
+            borderRadius: BorderRadius.circular(30),
             child: Container(
-              height: 43,
+              height: 42,
               padding: const EdgeInsets.symmetric(
                 horizontal: 14,
               ),
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(26),
+                color: glassColor.withValues(
+                  alpha: 0.43,
+                ),
+                borderRadius: BorderRadius.circular(30),
                 border: Border.all(
                   color: Colors.white.withValues(
                     alpha: 0.28,
@@ -612,15 +539,15 @@ class _S04SmartScanState extends State<S04SmartScan>
                   const Icon(
                     Icons.zoom_in_rounded,
                     color: Colors.white,
-                    size: 21,
+                    size: 18,
                   ),
-                  const SizedBox(width: 7),
+                  const SizedBox(width: 6),
                   Text(
                     '${_zoom.toStringAsFixed(1)}×',
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w800,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ],
@@ -632,30 +559,26 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
-  // ====================================================
-  // SLIDER ZOOM GLASS
-  // ====================================================
+  // ========================================
+  // PANEL ZOOM GLASS
+  // ========================================
 
   Widget _buildZoomSlider() {
     return ClipRRect(
-      key: const ValueKey('slider-zoom'),
       borderRadius: BorderRadius.circular(28),
       child: BackdropFilter(
         filter: ImageFilter.blur(
-          sigmaX: 18,
-          sigmaY: 18,
+          sigmaX: 15,
+          sigmaY: 15,
         ),
         child: Container(
-          constraints: const BoxConstraints(
-            maxWidth: 315,
-          ),
-          height: 60,
+          height: 54,
           padding: const EdgeInsets.symmetric(
-            horizontal: 12,
+            horizontal: 10,
           ),
           decoration: BoxDecoration(
-            color: Colors.black.withValues(
-              alpha: 0.59,
+            color: glassColor.withValues(
+              alpha: 0.43,
             ),
             borderRadius: BorderRadius.circular(28),
             border: Border.all(
@@ -664,382 +587,162 @@ class _S04SmartScanState extends State<S04SmartScan>
               ),
             ),
           ),
-          child: _zoomLoading
-              ? const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SizedBox(
-                      width: 17,
-                      height: 17,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    ),
-                    SizedBox(width: 9),
-                    Expanded(
-                      child: Text(
-                        'Menyiapkan zoom...',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ),
-                  ],
-                )
-              : !_zoomAvailable
-                  ? Row(
-                      children: [
-                        const Expanded(
-                          child: Text(
-                            'Batas zoom belum tersedia',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 11,
-                            ),
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: 'Coba lagi',
-                          onPressed: () {
-                            unawaited(
-                              _readZoomLimits(),
-                            );
-                          },
-                          icon: const Icon(
-                            Icons.refresh_rounded,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ],
-                    )
-                  : Row(
-                      children: [
-                        Text(
-                          '${_zoom.toStringAsFixed(1)}×',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                        const SizedBox(width: 7),
-                        Expanded(
-                          child: SliderTheme(
-                            data: SliderThemeData(
-                              activeTrackColor: Colors.white,
-                              inactiveTrackColor: Colors.white.withValues(
-                                alpha: 0.30,
-                              ),
-                              thumbColor: Colors.white,
-                              overlayColor: Colors.white.withValues(
-                                alpha: 0.15,
-                              ),
-                              trackHeight: 3,
-                              thumbShape: const RoundSliderThumbShape(
-                                enabledThumbRadius: 7,
-                              ),
-                            ),
-                            child: Slider(
-                              value: _zoom
-                                  .clamp(
-                                    _minZoom,
-                                    _maxZoom,
-                                  )
-                                  .toDouble(),
-                              min: _minZoom,
-                              max: _maxZoom,
-                              onChangeStart: (_) {
-                                _zoomHideTimer?.cancel();
-
-                                setState(() {
-                                  _zoomDragging = true;
-                                });
-                              },
-                              onChanged: _changeZoom,
-                              onChangeEnd: (_) {
-                                setState(() {
-                                  _zoomDragging = false;
-                                });
-
-                                _scheduleZoomHide();
-                              },
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 3),
-                        Text(
-                          '${_maxZoom.toStringAsFixed(0)}×',
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(width: 5),
-                        InkWell(
-                          onTap: _toggleZoomPanel,
-                          child: const Padding(
-                            padding: EdgeInsets.all(4),
-                            child: Icon(
-                              Icons.close_rounded,
-                              color: Colors.white,
-                              size: 19,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildZoomControl() {
-    return Align(
-      alignment: Alignment.bottomRight,
-      child: AnimatedSwitcher(
-        duration: const Duration(
-          milliseconds: 220,
-        ),
-        switchInCurve: Curves.easeOut,
-        switchOutCurve: Curves.easeIn,
-        child: _zoomPanelOpen ? _buildZoomSlider() : _buildMiniZoomButton(),
-      ),
-    );
-  }
-
-  // ====================================================
-  // CAMERA PREVIEW
-  // ====================================================
-
-  Widget _buildCameraPreview() {
-    final controller = _camera;
-
-    if (!_cameraReady || controller == null) {
-      if (_error != null) {
-        return Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  Icons.camera_alt_outlined,
-                  color: Colors.white70,
-                  size: 45,
-                ),
-                const SizedBox(height: 13),
-                const Text(
-                  'Kamera tidak dapat dibuka',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
+          child: Row(
+            children: [
+              if (_zoomLoading) ...[
+                const SizedBox(width: 8),
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
                     color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
                   ),
                 ),
-                const SizedBox(height: 14),
-                ElevatedButton(
-                  onPressed: _retryCamera,
-                  child: const Text('Coba lagi'),
-                ),
-              ],
-            ),
-          ),
-        );
-      }
-
-      return const Center(
-        child: CircularProgressIndicator(
-          color: Colors.white,
-          strokeWidth: 3,
-        ),
-      );
-    }
-
-    final previewSize = controller.value.previewSize;
-
-    if (previewSize == null) {
-      return CameraPreview(controller);
-    }
-
-    final isPortrait =
-        MediaQuery.orientationOf(context) == Orientation.portrait;
-
-    final previewWidth = isPortrait ? previewSize.height : previewSize.width;
-
-    final previewHeight = isPortrait ? previewSize.width : previewSize.height;
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return ClipRect(
-          child: SizedBox(
-            width: constraints.maxWidth,
-            height: constraints.maxHeight,
-            child: FittedBox(
-              fit: BoxFit.cover,
-              child: SizedBox(
-                width: previewWidth,
-                height: previewHeight,
-                child: CameraPreview(controller),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  // ====================================================
-  // GLASS BUTTON
-  // ====================================================
-
-  Widget _buildGlassButton({
-    required IconData icon,
-    required VoidCallback onTap,
-    String? text,
-  }) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(25),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(
-          sigmaX: 13,
-          sigmaY: 13,
-        ),
-        child: Material(
-          color: Colors.black.withValues(alpha: 0.34),
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(25),
-            child: Container(
-              constraints: const BoxConstraints(
-                minHeight: 42,
-              ),
-              padding: const EdgeInsets.symmetric(
-                horizontal: 12,
-              ),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(25),
-                border: Border.all(
-                  color: Colors.white.withValues(
-                    alpha: 0.23,
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Text(
+                    'Menyiapkan zoom...',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                    ),
                   ),
                 ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    icon,
+              ] else if (!_zoomAvailable) ...[
+                Expanded(
+                  child: Text(
+                    _zoomError ?? 'Zoom belum tersedia.',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                    ),
+                    maxLines: 2,
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Coba baca zoom lagi',
+                  onPressed: () {
+                    unawaited(_readZoomLimits());
+                  },
+                  icon: const Icon(
+                    Icons.refresh_rounded,
                     color: Colors.white,
                     size: 19,
                   ),
-                  if (text != null) ...[
-                    const SizedBox(width: 6),
-                    Text(
-                      text,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
+                ),
+              ] else ...[
+                const SizedBox(width: 5),
+                SizedBox(
+                  width: 48,
+                  child: Text(
+                    '${_zoom.toStringAsFixed(1)}×',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      activeTrackColor: primary,
+                      inactiveTrackColor: Colors.white.withValues(
+                        alpha: 0.25,
+                      ),
+                      thumbColor: primary,
+                      overlayColor: primary.withValues(
+                        alpha: 0.15,
+                      ),
+                      trackHeight: 3.5,
+                      thumbShape: const RoundSliderThumbShape(
+                        enabledThumbRadius: 10,
                       ),
                     ),
-                  ],
-                ],
+                    child: Slider(
+                      min: _minZoom,
+                      max: _maxZoom,
+                      value: _zoom
+                          .clamp(
+                            _minZoom,
+                            _maxZoom,
+                          )
+                          .toDouble(),
+                      onChangeStart: (_) {
+                        _zoomHideTimer?.cancel();
+                        _zoomDragging = true;
+                      },
+                      onChanged: _changeZoom,
+                      onChangeEnd: (_) {
+                        _zoomDragging = false;
+                        _scheduleZoomHide();
+                      },
+                    ),
+                  ),
+                ),
+              ],
+
+              // Tombol tutup zoom.
+              IconButton(
+                tooltip: 'Tutup zoom',
+                onPressed: _toggleZoomPanel,
+                icon: const Icon(
+                  Icons.close_rounded,
+                  color: Colors.white,
+                  size: 19,
+                ),
+                constraints: const BoxConstraints(
+                  minWidth: 38,
+                  minHeight: 38,
+                ),
+                padding: EdgeInsets.zero,
               ),
-            ),
+            ],
           ),
         ),
       ),
     );
   }
 
-  // ====================================================
-  // LANGUAGE SELECTION
-  // ====================================================
+  // ========================================
+  // KONTROL MINI ZOOM DALAM AREA KAMERA
+  // ========================================
 
-  Future<void> _chooseLanguage({
-    required bool source,
-  }) async {
-    final selected = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: Colors.white,
-      isScrollControlled: true,
-      builder: (sheetContext) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(
-              20,
-              20,
-              20,
-              15,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  'Pilih Bahasa',
-                  style: TextStyle(
-                    fontSize: 19,
-                    fontWeight: FontWeight.w800,
-                  ),
+  Widget _buildZoomControl() {
+    return Align(
+      alignment: Alignment.centerRight,
+      child: AnimatedSwitcher(
+        duration: const Duration(
+          milliseconds: 180,
+        ),
+        switchInCurve: Curves.easeOut,
+        switchOutCurve: Curves.easeIn,
+        child: _zoomPanelOpen
+            ? SizedBox(
+                key: const ValueKey(
+                  'zoomSlider',
                 ),
-                const SizedBox(height: 12),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(
-                    maxHeight: 400,
-                  ),
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: _languages.length,
-                    itemBuilder: (context, index) {
-                      final language = _languages[index];
-
-                      final active = source
-                          ? _sourceLanguage == language
-                          : _targetLanguage == language;
-
-                      return ListTile(
-                        title: Text(language),
-                        trailing: active
-                            ? const Icon(
-                                Icons.check_circle,
-                                color: primary,
-                              )
-                            : null,
-                        onTap: () {
-                          Navigator.pop(
-                            sheetContext,
-                            language,
-                          );
-                        },
-                      );
-                    },
-                  ),
+                width: double.infinity,
+                child: _buildZoomSlider(),
+              )
+            : SizedBox(
+                key: const ValueKey(
+                  'miniZoom',
                 ),
-              ],
-            ),
-          ),
-        );
-      },
+                child: _buildMiniZoomButton(),
+              ),
+      ),
     );
-
-    if (!mounted || selected == null) {
-      return;
-    }
-
-    setState(() {
-      if (source) {
-        _sourceLanguage = selected;
-      } else {
-        _targetLanguage = selected;
-      }
-    });
   }
 
-  void _swapLanguages() {
+  // ========================================
+  // BAHASA
+  // ========================================
+
+  void _swapLanguage() {
+    if (_busy || _suspended) return;
+
     setState(() {
       final previous = _sourceLanguage;
 
@@ -1048,227 +751,474 @@ class _S04SmartScanState extends State<S04SmartScan>
     });
   }
 
-  // ====================================================
-  // SCANNER HEADER
-  // ====================================================
+  void _setLanguage(
+    String source,
+    String target,
+  ) {
+    if (!mounted) return;
 
-  Widget _buildScannerHeader() {
-    return Row(
-      children: [
-        _buildGlassButton(
-          icon: Icons.arrow_back_rounded,
-          onTap: () {
-            if (MainTabShell.isEmbedded(context)) {
-              openTab(context, 0);
-            } else {
-              Navigator.of(context).maybePop();
-            }
-          },
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Flexible(
-                child: _buildGlassButton(
-                  icon: Icons.language_rounded,
-                  text: _sourceLanguage,
+    setState(() {
+      _sourceLanguage = source;
+      _targetLanguage = target;
+    });
+  }
+
+  void _showLanguagePicker() {
+    if (_busy || _suspended) return;
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return SafeArea(
+          top: false,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(
+              22,
+              14,
+              22,
+              28,
+            ),
+            decoration: const BoxDecoration(
+              color: Color(0xFF191E32),
+              borderRadius: BorderRadius.vertical(
+                top: Radius.circular(28),
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.white30,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                const Text(
+                  'Pilih bahasa pemindaian',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 21,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Tentukan arah bahasa yang digunakan.',
+                  style: TextStyle(
+                    color: Color(0xFFA6AEC8),
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                _languageOption(
+                  title: 'English → Indonesia',
+                  selected: _sourceLanguage == 'English',
                   onTap: () {
-                    _chooseLanguage(source: true);
+                    _setLanguage(
+                      'English',
+                      'Indonesia',
+                    );
+
+                    Navigator.pop(sheetContext);
                   },
                 ),
+                const SizedBox(height: 12),
+                _languageOption(
+                  title: 'Indonesia → English',
+                  selected: _sourceLanguage == 'Indonesia',
+                  onTap: () {
+                    _setLanguage(
+                      'Indonesia',
+                      'English',
+                    );
+
+                    Navigator.pop(sheetContext);
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _languageOption({
+    required String title,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color:
+          selected ? primary.withValues(alpha: 0.24) : const Color(0xFF2B3045),
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: 17,
+            vertical: 17,
+          ),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: selected ? const Color(0xFF8FA0FF) : Colors.white12,
+            ),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
-              const SizedBox(width: 5),
-              InkWell(
-                onTap: _swapLanguages,
-                child: const Icon(
+              if (selected)
+                const Icon(
+                  Icons.check_circle_rounded,
+                  color: Color(0xFF91A1FF),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ========================================
+  // TOMBOL GLASS BULAT
+  // ========================================
+
+  Widget _glassCircleButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback? onTap,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: ClipOval(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(
+            sigmaX: 15,
+            sigmaY: 15,
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onTap,
+              customBorder: const CircleBorder(),
+              child: Container(
+                width: 49,
+                height: 49,
+                decoration: BoxDecoration(
+                  color: glassColor.withValues(
+                    alpha: 0.43,
+                  ),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Colors.white.withValues(
+                      alpha: 0.28,
+                    ),
+                  ),
+                ),
+                child: Center(
+                  child: Icon(
+                    icon,
+                    color: onTap == null ? Colors.white54 : Colors.white,
+                    size: 23,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ========================================
+  // PEMILIH BAHASA GLASS
+  // ========================================
+
+  Widget _buildGlassLanguagePicker() {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(28),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(
+          sigmaX: 15,
+          sigmaY: 15,
+        ),
+        child: Container(
+          height: 49,
+          decoration: BoxDecoration(
+            color: glassColor.withValues(
+              alpha: 0.43,
+            ),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(
+              color: Colors.white.withValues(
+                alpha: 0.28,
+              ),
+            ),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _showLanguagePicker,
+                    child: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                        ),
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            '$_sourceLanguage  →  $_targetLanguage',
+                            maxLines: 1,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Tukar bahasa',
+                onPressed: _busy || _suspended ? null : _swapLanguage,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(
+                  minWidth: 42,
+                  minHeight: 42,
+                ),
+                icon: const Icon(
                   Icons.swap_horiz_rounded,
                   color: Colors.white,
-                  size: 24,
-                ),
-              ),
-              const SizedBox(width: 5),
-              Flexible(
-                child: _buildGlassButton(
-                  icon: Icons.language_rounded,
-                  text: _targetLanguage,
-                  onTap: () {
-                    _chooseLanguage(source: false);
-                  },
+                  size: 23,
                 ),
               ),
             ],
           ),
         ),
-        const SizedBox(width: 8),
-        _buildGlassButton(
+      ),
+    );
+  }
+
+  // ========================================
+  // HEADER SCANNER
+  // ========================================
+
+  Widget _buildScannerHeader() {
+    return Row(
+      children: [
+        _glassCircleButton(
+          icon: Icons.arrow_back_rounded,
+          tooltip: 'Kembali',
+          onTap: _busy || _suspended ? null : () => openTab(context, 0),
+        ),
+        const SizedBox(width: 9),
+        Expanded(
+          child: _buildGlassLanguagePicker(),
+        ),
+        const SizedBox(width: 9),
+        _glassCircleButton(
           icon: Icons.fullscreen_rounded,
-          onTap: _openFullCamera,
+          tooltip: 'Kamera fullscreen',
+          onTap: _busy || _suspended
+              ? null
+              : () {
+                  unawaited(_openFullCamera());
+                },
         ),
       ],
     );
   }
 
-  // ====================================================
-  // OCR
-  // ====================================================
+  // ========================================
+  // MENAMPILKAN PESAN
+  // ========================================
 
-  Future<String> _recognizeText(
-    String imagePath,
-  ) async {
-    final recognizer = TextRecognizer(
-      script: TextRecognitionScript.latin,
+  void _showMessage(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+      ),
     );
-
-    try {
-      final inputImage = InputImage.fromFilePath(imagePath);
-
-      final result = await recognizer.processImage(inputImage);
-
-      return result.text.trim();
-    } finally {
-      await recognizer.close();
-    }
   }
 
+  // ========================================
+  // HASIL OCR
+  // ========================================
+
   Future<void> _openOcrResult(
-    String recognizedText,
+    String text,
   ) async {
-    if (!mounted) {
+    if (!mounted || text.trim().isEmpty) {
       return;
     }
 
-    final text = recognizedText.trim();
+    final route = MaterialPageRoute<void>(
+      builder: (_) => S05OcrReview(
+        initialText: text,
+      ),
+    );
 
-    if (text.isEmpty) {
+    await Navigator.of(context).push<void>(route);
+
+    await route.completed;
+  }
+
+  // ========================================
+  // BUKA KAMERA FULLSCREEN
+  // ========================================
+
+  Future<void> _openFullCamera() async {
+    if (_busy || _suspended) return;
+
+    if (kIsWeb) {
       _showMessage(
-        'Teks tidak ditemukan. Coba pindai lagi.',
+        'Kamera fullscreen tersedia di HP Android.',
       );
       return;
     }
 
-    _suspended = true;
-
-    await _stopCamera();
-
-    if (!mounted) {
-      return;
-    }
+    setState(() {
+      _suspended = true;
+      _error = null;
+    });
 
     try {
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => S05OcrReview(
-            initialText: text,
-          ),
-        ),
+      await _stopCamera();
+
+      if (!mounted) return;
+
+      final route = MaterialPageRoute<String>(
+        builder: (_) => const S04BCameraCapture(),
+      );
+
+      final scannedText = await Navigator.of(context).push<String>(route);
+
+      await route.completed;
+
+      if (!mounted) return;
+
+      if (scannedText != null && scannedText.trim().isNotEmpty) {
+        await _openOcrResult(scannedText);
+      }
+    } catch (_) {
+      _showMessage(
+        'Mode kamera fullscreen gagal dibuka.',
       );
     } finally {
       if (mounted) {
-        _suspended = false;
+        setState(() {
+          _suspended = false;
+          _error = null;
+        });
+
+        _tabVisible = TickerMode.of(context);
+
         _syncCamera();
       }
     }
   }
 
-  // ====================================================
-  // SCAN LANGSUNG
-  // ====================================================
+  // ========================================
+  // PINDAI KAMERA REAL-TIME
+  // ========================================
 
-  Future<void> _scanNow() async {
+  Future<void> _scanCamera() async {
     final controller = _camera;
 
-    if (_busy || !_cameraReady || controller == null) {
+    if (controller == null || !_cameraReady || _busy) {
       return;
     }
 
     setState(() {
       _busy = true;
+      _error = null;
     });
 
-    try {
-      final image = await controller.takePicture();
+    final recognizer = TextRecognizer(
+      script: TextRecognitionScript.latin,
+    );
 
-      final text = await _recognizeText(
-        image.path,
+    try {
+      final photo = await controller.takePicture();
+
+      final result = await recognizer.processImage(
+        InputImage.fromFilePath(photo.path),
       );
 
-      if (!mounted) {
+      if (!mounted) return;
+
+      final text = result.text.trim();
+
+      if (text.isEmpty) {
+        _showMessage(
+          'Teks tidak terdeteksi. '
+          'Coba dekatkan kamera.',
+        );
         return;
       }
 
-      await _openOcrResult(text);
-    } catch (error) {
-      debugPrint('LASTSEEN OCR ERROR: $error');
+      _suspended = true;
 
+      await _stopCamera();
+
+      if (!mounted) return;
+
+      await _openOcrResult(text);
+    } catch (_) {
       _showMessage(
         'Gagal memindai teks. Coba lagi.',
       );
     } finally {
+      await recognizer.close();
+
       if (mounted) {
         setState(() {
           _busy = false;
+          _suspended = false;
         });
+
+        _syncCamera();
       }
     }
   }
 
-  // ====================================================
-  // GALERI
-  // ====================================================
+  // ========================================
+  // AMBIL FOTO DARI GALERI
+  // ========================================
 
   Future<void> _openGallery() async {
-    if (_busy) {
-      return;
-    }
+    if (_busy || _suspended) return;
 
-    setState(() {
-      _busy = true;
-    });
-
-    try {
-      final image = await _imagePicker.pickImage(
-        source: ImageSource.gallery,
-        imageQuality: 95,
-      );
-
-      if (image == null || !mounted) {
-        return;
-      }
-
-      final text = await _recognizeText(
-        image.path,
-      );
-
-      if (!mounted) {
-        return;
-      }
-
-      await _openOcrResult(text);
-    } catch (error) {
-      debugPrint(
-        'LASTSEEN GALLERY ERROR: $error',
-      );
-
+    if (kIsWeb) {
       _showMessage(
-        'Gagal membaca gambar dari galeri.',
+        'OCR foto tersedia di aplikasi Android.',
       );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _busy = false;
-        });
-      }
-    }
-  }
-
-  // ====================================================
-  // IMPOR DOKUMEN
-  // ====================================================
-
-  Future<void> _openImport() async {
-    if (_busy) {
       return;
     }
 
@@ -1277,30 +1227,91 @@ class _S04SmartScanState extends State<S04SmartScan>
       _suspended = true;
     });
 
+    TextRecognizer? recognizer;
+
     try {
       await _stopCamera();
 
-      if (!mounted) {
+      if (!mounted) return;
+
+      final photo = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+      );
+
+      if (!mounted || photo == null) {
         return;
       }
 
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => const S06ImportDocument(),
-        ),
-      );
-    } catch (error) {
-      debugPrint(
-        'LASTSEEN IMPORT ERROR: $error',
+      recognizer = TextRecognizer(
+        script: TextRecognitionScript.latin,
       );
 
+      final result = await recognizer.processImage(
+        InputImage.fromFilePath(photo.path),
+      );
+
+      if (!mounted) return;
+
+      final text = result.text.trim();
+
+      if (text.isEmpty) {
+        _showMessage(
+          'Tidak ditemukan teks pada foto.',
+        );
+        return;
+      }
+
+      await _openOcrResult(text);
+    } catch (_) {
+      _showMessage(
+        'Gagal membaca foto dari galeri.',
+      );
+    } finally {
+      if (recognizer != null) {
+        await recognizer.close();
+      }
+
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _suspended = false;
+        });
+
+        _syncCamera();
+      }
+    }
+  }
+
+  // ========================================
+  // IMPOR DOKUMEN / PDF
+  // ========================================
+
+  Future<void> _openImport() async {
+    if (_busy || _suspended) return;
+
+    setState(() {
+      _suspended = true;
+    });
+
+    try {
+      await _stopCamera();
+
+      if (!mounted) return;
+
+      final route = MaterialPageRoute<void>(
+        builder: (_) => const S06ImportDocument(),
+      );
+
+      await Navigator.of(context).push<void>(route);
+
+      await route.completed;
+    } catch (_) {
       _showMessage(
         'Gagal membuka impor dokumen.',
       );
     } finally {
       if (mounted) {
         setState(() {
-          _busy = false;
           _suspended = false;
         });
 
@@ -1309,306 +1320,285 @@ class _S04SmartScanState extends State<S04SmartScan>
     }
   }
 
-  // ====================================================
-  // FULLSCREEN CAMERA
-  // ====================================================
+  // ========================================
+  // LIVE CAMERA PREVIEW
+  // ========================================
 
-  Future<void> _openFullCamera() async {
-    if (_busy) {
-      return;
+  Widget _buildLivePreview() {
+    final controller = _camera;
+
+    if (controller == null || !controller.value.isInitialized) {
+      return Container(
+        color: navy,
+        child: Center(
+          child: _error == null
+              ? const CircularProgressIndicator(
+                  color: primary,
+                  strokeWidth: 2.5,
+                )
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.camera_alt_outlined,
+                      color: Colors.white54,
+                      size: 40,
+                    ),
+                    const SizedBox(height: 12),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 25,
+                      ),
+                      child: Text(
+                        _error!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextButton(
+                      onPressed: () {
+                        setState(() {
+                          _error = null;
+                        });
+
+                        _syncCamera();
+                      },
+                      child: const Text(
+                        'Coba Lagi',
+                      ),
+                    ),
+                  ],
+                ),
+        ),
+      );
     }
 
-    setState(() {
-      _busy = true;
-      _suspended = true;
-    });
+    final size = controller.value.previewSize;
 
-    try {
-      // Lepaskan kamera inline agar kamera
-      // fullscreen bisa menggunakannya.
-      await _stopCamera();
-
-      if (!mounted) {
-        return;
-      }
-
-      final route = MaterialPageRoute<String>(
-        builder: (_) => const S04BCameraCapture(),
-      );
-
-      final recognizedText = await Navigator.of(context).push(route);
-
-      // Tunggu animasi route selesai.
-      await route.completed;
-
-      if (!mounted) {
-        return;
-      }
-
-      if (recognizedText != null && recognizedText.trim().isNotEmpty) {
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(
-            builder: (_) => S05OcrReview(
-              initialText: recognizedText,
-            ),
-          ),
-        );
-      }
-    } catch (error) {
-      debugPrint(
-        'LASTSEEN FULLSCREEN ERROR: $error',
-      );
-
-      _showMessage(
-        'Gagal membuka kamera fullscreen.',
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _suspended = false;
-        });
-
-        _syncCamera();
-      }
-    }
-  }
-
-  // ====================================================
-  // SNACKBAR
-  // ====================================================
-
-  void _showMessage(String message) {
-    if (!mounted) {
-      return;
+    if (size == null) {
+      return CameraPreview(controller);
     }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 2),
+    return ClipRect(
+      child: FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: size.height,
+          height: size.width,
+          child: CameraPreview(controller),
+        ),
       ),
     );
   }
 
-  // ====================================================
-  // SCANNER PANEL
-  // ====================================================
+  // ========================================
+  // AREA SCANNER
+  // ========================================
 
-  Widget _buildScanner(double height) {
+  Widget _buildScanner(
+    double scanHeight,
+  ) {
     return Container(
-      height: height,
+      width: double.infinity,
+      height: scanHeight,
       decoration: BoxDecoration(
         color: navy,
-        borderRadius: BorderRadius.circular(29),
+        borderRadius: BorderRadius.circular(32),
       ),
       clipBehavior: Clip.antiAlias,
       child: Stack(
-        fit: StackFit.expand,
         children: [
-          // PREVIEW KAMERA
-          _buildCameraPreview(),
-
-          // GRADIENT AGAR HEADER TERBACA
-          IgnorePointer(
-            child: Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Color(0x99000000),
-                    Colors.transparent,
-                    Colors.transparent,
-                    Color(0x66000000),
-                  ],
-                  stops: [
-                    0.0,
-                    0.28,
-                    0.68,
-                    1.0,
-                  ],
-                ),
-              ),
-            ),
+          // Kamera real-time.
+          Positioned.fill(
+            child: _buildLivePreview(),
           ),
 
-          // GARIS SUDUT SCAN BIRU
-          IgnorePointer(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(
-                25,
-                100,
-                25,
-                98,
-              ),
+          // Empat sudut scan.
+          Positioned(
+            left: 34,
+            right: 34,
+            top: scanHeight * 0.23,
+            bottom: scanHeight * 0.22,
+            child: IgnorePointer(
               child: CustomPaint(
                 painter: _ScannerCornersPainter(),
               ),
             ),
           ),
 
-          // HEADER
+          // Header glass.
           Positioned(
-            top: 16,
-            left: 13,
-            right: 13,
+            top: 17,
+            left: 17,
+            right: 17,
             child: _buildScannerHeader(),
           ),
 
-          // PETUNJUK
-          const Positioned(
+          // Petunjuk scan.
+          Positioned(
             left: 20,
             right: 20,
-            bottom: 88,
-            child: Text(
-              'Arahkan kamera ke teks yang ingin dipindai',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                shadows: [
-                  Shadow(
-                    color: Colors.black54,
-                    blurRadius: 8,
+            bottom: 87,
+            child: IgnorePointer(
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 9,
                   ),
-                ],
-              ),
-            ),
-          ),
-
-          // MINI ZOOM GLASS
-          Positioned(
-            left: 16,
-            right: 16,
-            bottom: 16,
-            child: _buildZoomControl(),
-          ),
-
-          // INDIKATOR MEMINDAI
-          if (_busy)
-            const Positioned(
-              top: 78,
-              right: 21,
-              child: SizedBox(
-                height: 18,
-                width: 18,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Colors.white,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(
+                      alpha: 0.45,
+                    ),
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                  child: const Text(
+                    'Arahkan kamera ke teks yang jelas',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                    ),
+                  ),
                 ),
               ),
             ),
+          ),
+
+          // Mini Zoom Glass.
+          Positioned(
+            left: 17,
+            right: 17,
+            bottom: 16,
+            child: _buildZoomControl(),
+          ),
         ],
       ),
     );
   }
 
-  // ====================================================
-  // ACTION BUTTON
-  // ====================================================
-
-  Widget _buildAction({
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-    bool primaryAction = false,
-  }) {
-    return Expanded(
-      child: Material(
-        color: primaryAction ? primary : Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        child: InkWell(
-          onTap: _busy ? null : onTap,
-          borderRadius: BorderRadius.circular(20),
-          child: Container(
-            height: 72,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: primaryAction ? primary : const Color(0xFFE3E8F5),
-              ),
-            ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  icon,
-                  color: primaryAction ? Colors.white : primary,
-                  size: 25,
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: primaryAction ? Colors.white : ink,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  // ========================================
+  // GALERI / PINDAI / IMPOR
+  // ========================================
 
   Widget _buildActions() {
     return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
-        _buildAction(
+        _sideAction(
           icon: Icons.photo_library_outlined,
           label: 'Galeri',
-          onTap: _openGallery,
+          onTap: _busy || _suspended
+              ? null
+              : () {
+                  unawaited(_openGallery());
+                },
         ),
-        const SizedBox(width: 10),
-        _buildAction(
-          icon: Icons.document_scanner_rounded,
-          label: 'Pindai',
-          onTap: _scanNow,
-          primaryAction: true,
-        ),
-        const SizedBox(width: 10),
-        _buildAction(
+        _buildScanButton(),
+        _sideAction(
           icon: Icons.file_upload_outlined,
           label: 'Impor',
-          onTap: _openImport,
+          onTap: _busy || _suspended
+              ? null
+              : () {
+                  unawaited(_openImport());
+                },
         ),
       ],
     );
   }
 
-  // ====================================================
-  // TIPS
-  // ====================================================
-
-  Widget _buildTips() {
-    return Container(
-      padding: const EdgeInsets.all(15),
-      decoration: BoxDecoration(
-        color: const Color(0xFFEAEFFF),
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: const Row(
-        children: [
-          Icon(
-            Icons.tips_and_updates_outlined,
-            color: primary,
-            size: 23,
-          ),
-          SizedBox(width: 11),
-          Expanded(
-            child: Text(
-              'Pastikan teks terlihat jelas dan kamera '
-              'tidak bergerak agar hasil scan lebih akurat.',
-              style: TextStyle(
-                color: Color(0xFF4E5D8B),
-                fontSize: 12,
-                height: 1.45,
+  Widget _buildScanButton() {
+    return Column(
+      children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(60),
+          onTap: _cameraReady && !_busy
+              ? () {
+                  unawaited(_scanCamera());
+                }
+              : null,
+          child: Container(
+            width: 82,
+            height: 82,
+            padding: const EdgeInsets.all(7),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: primary,
+                width: 3,
               ),
+            ),
+            child: Container(
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: primary,
+              ),
+              child: _busy
+                  ? const Padding(
+                      padding: EdgeInsets.all(20),
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : const Icon(
+                      Icons.document_scanner_rounded,
+                      color: Colors.white,
+                      size: 30,
+                    ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 7),
+        const Text(
+          'Pindai',
+          style: TextStyle(
+            color: primary,
+            fontWeight: FontWeight.w700,
+            fontSize: 12,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _sideAction({
+    required IconData icon,
+    required String label,
+    required VoidCallback? onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Column(
+        children: [
+          Container(
+            width: 62,
+            height: 62,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border.all(
+                color: borderGrey,
+                width: 1.3,
+              ),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Icon(
+              icon,
+              color: onTap == null ? Colors.grey : primary,
+              size: 25,
+            ),
+          ),
+          const SizedBox(height: 7),
+          Text(
+            label,
+            style: const TextStyle(
+              color: muted,
+              fontSize: 12,
             ),
           ),
         ],
@@ -1616,9 +1606,9 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
-  // ====================================================
-  // BOTTOM NAVIGATION
-  // ====================================================
+  // ========================================
+  // NAVIGASI BAWAH
+  // ========================================
 
   Widget _buildBottomNavigation() {
     const icons = [
@@ -1639,16 +1629,16 @@ class _S04SmartScanState extends State<S04SmartScan>
 
     return Container(
       padding: const EdgeInsets.fromLTRB(
-        8,
+        12,
         9,
-        8,
+        12,
         8,
       ),
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(
           top: BorderSide(
-            color: Color(0xFFE3E8F5),
+            color: borderGrey,
           ),
         ),
       ),
@@ -1658,10 +1648,7 @@ class _S04SmartScanState extends State<S04SmartScan>
 
           return Expanded(
             child: InkWell(
-              onTap: () => openTab(
-                context,
-                index,
-              ),
+              onTap: () => openTab(context, index),
               borderRadius: BorderRadius.circular(15),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -1670,15 +1657,13 @@ class _S04SmartScanState extends State<S04SmartScan>
                     width: 51,
                     height: 35,
                     decoration: BoxDecoration(
-                      color: selected
-                          ? const Color(0xFFE9EEFF)
-                          : Colors.transparent,
+                      color: selected ? lightBlue : Colors.transparent,
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Icon(
                       icons[index],
                       color: selected ? primary : const Color(0xFF9BA5BF),
-                      size: 23,
+                      size: 22,
                     ),
                   ),
                   const SizedBox(height: 5),
@@ -1688,9 +1673,9 @@ class _S04SmartScanState extends State<S04SmartScan>
                       labels[index],
                       style: TextStyle(
                         color: selected ? primary : muted,
-                        fontSize: 11,
                         fontWeight:
                             selected ? FontWeight.w700 : FontWeight.w500,
+                        fontSize: 11,
                       ),
                     ),
                   ),
@@ -1703,17 +1688,17 @@ class _S04SmartScanState extends State<S04SmartScan>
     );
   }
 
-  // ====================================================
-  // BUILD
-  // ====================================================
+  // ========================================
+  // HALAMAN UTAMA
+  // ========================================
 
   @override
   Widget build(BuildContext context) {
-    final embedded = MainTabShell.isEmbedded(context);
-
     final screenHeight = MediaQuery.sizeOf(context).height;
 
-    final scannerHeight = (screenHeight * 0.54).clamp(280.0, 490.0).toDouble();
+    final scanHeight = (screenHeight * 0.59).clamp(360.0, 530.0).toDouble();
+
+    final embedded = MainTabShell.isEmbedded(context);
 
     return Scaffold(
       backgroundColor: background,
@@ -1721,39 +1706,22 @@ class _S04SmartScanState extends State<S04SmartScan>
         child: Column(
           children: [
             Expanded(
-              child: ListView(
+              child: SingleChildScrollView(
                 physics: const BouncingScrollPhysics(),
                 padding: const EdgeInsets.fromLTRB(
+                  20,
                   18,
-                  19,
-                  18,
-                  24,
+                  20,
+                  16,
                 ),
-                children: [
-                  const Text(
-                    'Smart Scan',
-                    style: TextStyle(
-                      color: ink,
-                      fontSize: 27,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.7,
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  const Text(
-                    'Pindai teks dari kamera atau dokumen.',
-                    style: TextStyle(
-                      color: muted,
-                      fontSize: 13,
-                    ),
-                  ),
-                  const SizedBox(height: 19),
-                  _buildScanner(scannerHeight),
-                  const SizedBox(height: 17),
-                  _buildActions(),
-                  const SizedBox(height: 17),
-                  _buildTips(),
-                ],
+                child: Column(
+                  children: [
+                    _buildScanner(scanHeight),
+                    const SizedBox(height: 22),
+                    _buildActions(),
+                    const SizedBox(height: 22),
+                  ],
+                ),
               ),
             ),
             if (!embedded) _buildBottomNavigation(),
@@ -1762,104 +1730,104 @@ class _S04SmartScanState extends State<S04SmartScan>
       ),
     );
   }
+
+  // ========================================
+  // DISPOSE
+  // ========================================
+
+  @override
+  void dispose() {
+    _disposing = true;
+    ++_cameraVersion;
+
+    _zoomHideTimer?.cancel();
+
+    WidgetsBinding.instance.removeObserver(this);
+
+    final controller = _camera;
+    _camera = null;
+
+    if (controller != null) {
+      unawaited(controller.dispose());
+    }
+
+    super.dispose();
+  }
 }
 
-// ======================================================
-// PAINTER SUDUT SCAN
-// ======================================================
+// ==========================================
+// PAINTER EMPAT SUDUT SCANNER
+// ==========================================
 
 class _ScannerCornersPainter extends CustomPainter {
   @override
-  void paint(Canvas canvas, Size size) {
+  void paint(
+    Canvas canvas,
+    Size size,
+  ) {
     final paint = Paint()
-      ..color = const Color(0xFF4C9BFF)
-      ..strokeWidth = 4
-      ..style = PaintingStyle.stroke
+      ..color = const Color(0xFF8095FF)
+      ..strokeWidth = 2.5
       ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
+      ..style = PaintingStyle.stroke;
 
-    const length = 28.0;
-    const radius = 13.0;
+    const double length = 33;
+    const double radius = 13;
 
-    final path = Path();
+    final w = size.width;
+    final h = size.height;
 
-    // KIRI ATAS
-    path.moveTo(0, length);
-    path.lineTo(0, radius);
-    path.quadraticBezierTo(
-      0,
-      0,
-      radius,
-      0,
-    );
-    path.lineTo(length, 0);
+    final path = Path()
+      // KIRI ATAS
+      ..moveTo(0, length)
+      ..lineTo(0, radius)
+      ..quadraticBezierTo(
+        0,
+        0,
+        radius,
+        0,
+      )
+      ..lineTo(length, 0)
 
-    // KANAN ATAS
-    path.moveTo(
-      size.width - length,
-      0,
-    );
-    path.lineTo(
-      size.width - radius,
-      0,
-    );
-    path.quadraticBezierTo(
-      size.width,
-      0,
-      size.width,
-      radius,
-    );
-    path.lineTo(
-      size.width,
-      length,
-    );
+      // KANAN ATAS
+      ..moveTo(w - length, 0)
+      ..lineTo(w - radius, 0)
+      ..quadraticBezierTo(
+        w,
+        0,
+        w,
+        radius,
+      )
+      ..lineTo(w, length)
 
-    // KIRI BAWAH
-    path.moveTo(
-      0,
-      size.height - length,
-    );
-    path.lineTo(
-      0,
-      size.height - radius,
-    );
-    path.quadraticBezierTo(
-      0,
-      size.height,
-      radius,
-      size.height,
-    );
-    path.lineTo(
-      length,
-      size.height,
-    );
+      // KIRI BAWAH
+      ..moveTo(0, h - length)
+      ..lineTo(0, h - radius)
+      ..quadraticBezierTo(
+        0,
+        h,
+        radius,
+        h,
+      )
+      ..lineTo(length, h)
 
-    // KANAN BAWAH
-    path.moveTo(
-      size.width - length,
-      size.height,
-    );
-    path.lineTo(
-      size.width - radius,
-      size.height,
-    );
-    path.quadraticBezierTo(
-      size.width,
-      size.height,
-      size.width,
-      size.height - radius,
-    );
-    path.lineTo(
-      size.width,
-      size.height - length,
-    );
+      // KANAN BAWAH
+      ..moveTo(w - length, h)
+      ..lineTo(w - radius, h)
+      ..quadraticBezierTo(
+        w,
+        h,
+        w,
+        h - radius,
+      )
+      ..lineTo(w, h - length);
 
     canvas.drawPath(path, paint);
   }
 
   @override
   bool shouldRepaint(
-    covariant _ScannerCornersPainter oldDelegate,
+    covariant CustomPainter oldDelegate,
   ) {
     return false;
   }
