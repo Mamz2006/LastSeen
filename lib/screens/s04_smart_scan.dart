@@ -17,7 +17,7 @@ import 's06_import_document.dart';
 
 // ==========================================
 // LASTSEEN - SMART SCAN REAL-TIME
-// MINI ZOOM GLASS + LIVE CAMERA + OCR CROP
+// MINI ZOOM GLASS + FLASH + OCR CROP
 // ==========================================
 
 class S04SmartScan extends StatefulWidget {
@@ -40,6 +40,7 @@ class _S04SmartScanState extends State<S04SmartScan>
   static const Color lightBlue = Color(0xFFE9EEFF);
   static const Color glassColor = Color(0xFF454B61);
   static const Color borderGrey = Color(0xFFDDE3F0);
+  static const Color flashActiveColor = Color(0xFFFFD54F);
 
   // ========================================
   // CAMERA
@@ -61,6 +62,15 @@ class _S04SmartScanState extends State<S04SmartScan>
   String? _error;
 
   final ImagePicker _imagePicker = ImagePicker();
+
+  // ========================================
+  // FLASH / TORCH
+  // ========================================
+
+  bool _flashOn = false;
+  bool _changingFlash = false;
+
+  Future<void>? _flashOperation;
 
   // ========================================
   // BATAS AREA SCAN
@@ -115,6 +125,9 @@ class _S04SmartScanState extends State<S04SmartScan>
 
   bool get _zoomAvailable => _cameraReady && _maxZoom > _minZoom;
 
+  bool get _flashAvailable =>
+      _cameraReady && !_busy && !_suspended && !_changingFlash && !_disposing;
+
   // ========================================
   // LIFECYCLE
   // ========================================
@@ -165,6 +178,7 @@ class _S04SmartScanState extends State<S04SmartScan>
       if (_camera != null || _starting != null) {
         unawaited(_stopCamera());
       }
+
       return;
     }
 
@@ -229,7 +243,22 @@ class _S04SmartScanState extends State<S04SmartScan>
         return;
       }
 
-      // Preview tampil segera setelah siap.
+      // Pastikan flash mati ketika kamera dibuka.
+      try {
+        await candidate.setFlashMode(
+          FlashMode.off,
+        );
+      } catch (_) {
+        // Kamera tetap dapat digunakan jika
+        // perangkat tidak mendukung flash.
+      }
+
+      if (!_isCurrent(version)) {
+        await candidate.dispose();
+        return;
+      }
+
+      // Preview tampil setelah kamera siap.
       setState(() {
         _camera = candidate;
         _error = null;
@@ -240,6 +269,9 @@ class _S04SmartScanState extends State<S04SmartScan>
 
         _zoomLoading = false;
         _zoomError = null;
+
+        _flashOn = false;
+        _changingFlash = false;
       });
 
       // Membaca kemampuan zoom tanpa
@@ -373,6 +405,10 @@ class _S04SmartScanState extends State<S04SmartScan>
     }
   }
 
+  // ========================================
+  // MELEPAS KAMERA DENGAN AMAN
+  // ========================================
+
   Future<void> _releaseCamera() async {
     _zoomHideTimer?.cancel();
 
@@ -392,8 +428,12 @@ class _S04SmartScanState extends State<S04SmartScan>
     final controller = _camera;
 
     _camera = null;
+
     _zoomLoading = false;
     _zoomError = null;
+
+    _flashOn = false;
+    _changingFlash = false;
 
     if (controller != null && mounted && !_disposing) {
       // Hilangkan CameraPreview
@@ -403,6 +443,18 @@ class _S04SmartScanState extends State<S04SmartScan>
       await WidgetsBinding.instance.endOfFrame;
     }
 
+    if (controller != null) {
+      await _disposeCameraSafely(controller);
+    }
+  }
+
+  // ========================================
+  // DISPOSE CONTROLLER DENGAN AMAN
+  // ========================================
+
+  Future<void> _disposeCameraSafely(
+    CameraController controller,
+  ) async {
     // Tunggu zoom yang sedang berjalan.
     final operations = _zoomOperations.toList();
 
@@ -412,10 +464,94 @@ class _S04SmartScanState extends State<S04SmartScan>
       } catch (_) {}
     }
 
-    if (controller != null) {
+    // Pastikan flash mati sebelum kamera dilepas.
+    await _turnOffFlash(controller);
+
+    try {
+      await controller.dispose();
+    } catch (_) {}
+  }
+
+  // ========================================
+  // FLASH / TORCH CAMERA
+  // ========================================
+
+  Future<void> _toggleFlash() async {
+    final controller = _camera;
+
+    if (controller == null || !_flashAvailable) {
+      return;
+    }
+
+    final nextFlash = !_flashOn;
+
+    setState(() {
+      _changingFlash = true;
+    });
+
+    Future<void>? operation;
+
+    try {
+      // Torch membuat lampu menyala terus
+      // selama pengguna mengarahkan kamera.
+      operation = controller.setFlashMode(
+        nextFlash ? FlashMode.torch : FlashMode.off,
+      );
+
+      _flashOperation = operation;
+
+      await operation;
+
+      if (!mounted || _disposing || !identical(_camera, controller)) {
+        return;
+      }
+
+      setState(() {
+        _flashOn = nextFlash;
+      });
+    } catch (_) {
+      if (mounted && !_disposing && identical(_camera, controller)) {
+        _showMessage(
+          'Flash tidak tersedia pada kamera ini.',
+        );
+      }
+    } finally {
+      if (identical(_flashOperation, operation)) {
+        _flashOperation = null;
+      }
+
+      if (mounted && !_disposing && identical(_camera, controller)) {
+        setState(() {
+          _changingFlash = false;
+        });
+      }
+    }
+  }
+
+  // ========================================
+  // MEMATIKAN FLASH DENGAN AMAN
+  // ========================================
+
+  Future<void> _turnOffFlash(
+    CameraController controller,
+  ) async {
+    final operation = _flashOperation;
+
+    if (operation != null) {
       try {
-        await controller.dispose();
+        await operation;
       } catch (_) {}
+    }
+
+    try {
+      if (controller.value.isInitialized) {
+        await controller.setFlashMode(
+          FlashMode.off,
+        );
+      }
+    } catch (_) {
+      // Abaikan jika kamera tidak mendukung
+      // flash atau sudah tidak tersedia.
     }
   }
 
@@ -432,6 +568,7 @@ class _S04SmartScanState extends State<S04SmartScan>
       _showMessage(
         'Kamera belum siap. Coba lagi setelah preview muncul.',
       );
+
       return;
     }
 
@@ -497,8 +634,9 @@ class _S04SmartScanState extends State<S04SmartScan>
       _zoom = next;
     });
 
-    final Future<void> operation =
-        controller.setZoomLevel(next).catchError((Object _) {});
+    final Future<void> operation = controller.setZoomLevel(next).catchError(
+          (Object _) {},
+        );
 
     _zoomOperations.add(operation);
 
@@ -506,6 +644,103 @@ class _S04SmartScanState extends State<S04SmartScan>
       operation.whenComplete(() {
         _zoomOperations.remove(operation);
       }),
+    );
+  }
+
+  // ========================================
+  // MINI FLASH GLASS BUTTON
+  // ========================================
+
+  Widget _buildMiniFlashButton() {
+    final enabled = _flashAvailable;
+
+    final iconColor = _flashOn ? flashActiveColor : Colors.white;
+
+    final tooltip = _flashOn ? 'Matikan flash' : 'Nyalakan flash';
+
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      toggled: _flashOn,
+      label: tooltip,
+      child: Tooltip(
+        message: tooltip,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(30),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(
+              sigmaX: 15,
+              sigmaY: 15,
+            ),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: enabled
+                    ? () {
+                        unawaited(_toggleFlash());
+                      }
+                    : null,
+                borderRadius: BorderRadius.circular(30),
+                child: AnimatedContainer(
+                  duration: const Duration(
+                    milliseconds: 180,
+                  ),
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: _flashOn
+                        ? flashActiveColor.withValues(
+                            alpha: 0.16,
+                          )
+                        : glassColor.withValues(
+                            alpha: 0.43,
+                          ),
+                    borderRadius: BorderRadius.circular(30),
+                    border: Border.all(
+                      color: _flashOn
+                          ? flashActiveColor.withValues(
+                              alpha: 0.65,
+                            )
+                          : Colors.white.withValues(
+                              alpha: 0.28,
+                            ),
+                      width: 1,
+                    ),
+                  ),
+                  child: Center(
+                    child: _changingFlash
+                        ? const SizedBox(
+                            width: 17,
+                            height: 17,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 1.8,
+                            ),
+                          )
+                        : AnimatedSwitcher(
+                            duration: const Duration(
+                              milliseconds: 180,
+                            ),
+                            child: Icon(
+                              _flashOn
+                                  ? Icons.flash_on_rounded
+                                  : Icons.flash_off_rounded,
+                              key: ValueKey(_flashOn),
+                              color: enabled
+                                  ? iconColor
+                                  : iconColor.withValues(
+                                      alpha: 0.45,
+                                    ),
+                              size: 22,
+                            ),
+                          ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -634,9 +869,11 @@ class _S04SmartScanState extends State<S04SmartScan>
                 ),
                 IconButton(
                   tooltip: 'Coba baca zoom lagi',
-                  onPressed: () {
-                    unawaited(_readZoomLimits());
-                  },
+                  onPressed: _busy
+                      ? null
+                      : () {
+                          unawaited(_readZoomLimits());
+                        },
                   icon: const Icon(
                     Icons.refresh_rounded,
                     color: Colors.white,
@@ -698,7 +935,7 @@ class _S04SmartScanState extends State<S04SmartScan>
               // Tombol tutup zoom.
               IconButton(
                 tooltip: 'Tutup zoom',
-                onPressed: _toggleZoomPanel,
+                onPressed: _busy ? null : _toggleZoomPanel,
                 icon: const Icon(
                   Icons.close_rounded,
                   color: Colors.white,
@@ -745,6 +982,28 @@ class _S04SmartScanState extends State<S04SmartScan>
                 child: _buildMiniZoomButton(),
               ),
       ),
+    );
+  }
+
+  // ========================================
+  // FLASH + MINI ZOOM GLASS
+  // ========================================
+
+  Widget _buildCameraBottomControls() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        // Flash tetap berada di kiri.
+        _buildMiniFlashButton(),
+
+        const SizedBox(width: 12),
+
+        // Zoom tetap berada di kanan.
+        // Slider menggunakan ruang yang tersedia.
+        Expanded(
+          child: _buildZoomControl(),
+        ),
+      ],
     );
   }
 
@@ -1070,7 +1329,7 @@ class _S04SmartScanState extends State<S04SmartScan>
   // ========================================
 
   void _showMessage(String message) {
-    if (!mounted) return;
+    if (!mounted || _disposing) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -1112,6 +1371,7 @@ class _S04SmartScanState extends State<S04SmartScan>
       _showMessage(
         'Kamera fullscreen tersedia di HP Android.',
       );
+
       return;
     }
 
@@ -1121,6 +1381,8 @@ class _S04SmartScanState extends State<S04SmartScan>
     });
 
     try {
+      // Flash otomatis dimatikan ketika
+      // kamera Smart Scan dihentikan.
       await _stopCamera();
 
       if (!mounted) return;
@@ -1432,7 +1694,7 @@ class _S04SmartScanState extends State<S04SmartScan>
   Future<void> _scanCamera() async {
     final controller = _camera;
 
-    if (controller == null || !_cameraReady || _busy) {
+    if (controller == null || !_cameraReady || _busy || _changingFlash) {
       return;
     }
 
@@ -1488,6 +1750,16 @@ class _S04SmartScanState extends State<S04SmartScan>
         await Future.wait(operations);
       }
 
+      // ====================================
+      // TUNGGU OPERASI FLASH SELESAI
+      // ====================================
+
+      final flashOperation = _flashOperation;
+
+      if (flashOperation != null) {
+        await flashOperation;
+      }
+
       if (!mounted ||
           _disposing ||
           !_cameraReady ||
@@ -1499,6 +1771,8 @@ class _S04SmartScanState extends State<S04SmartScan>
       // AMBIL FOTO
       // ====================================
 
+      // Flash tetap menyala jika sebelumnya
+      // diaktifkan oleh pengguna.
       photo = await controller.takePicture();
 
       if (!mounted ||
@@ -1579,6 +1853,8 @@ class _S04SmartScanState extends State<S04SmartScan>
 
       _suspended = true;
 
+      // Flash otomatis dimatikan melalui
+      // proses penghentian kamera.
       await _stopCamera();
 
       if (!mounted) return;
@@ -1628,6 +1904,7 @@ class _S04SmartScanState extends State<S04SmartScan>
       _showMessage(
         'OCR foto tersedia di aplikasi Android.',
       );
+
       return;
     }
 
@@ -1639,6 +1916,8 @@ class _S04SmartScanState extends State<S04SmartScan>
     TextRecognizer? recognizer;
 
     try {
+      // Flash otomatis dimatikan ketika
+      // kamera dihentikan.
       await _stopCamera();
 
       if (!mounted) return;
@@ -1669,6 +1948,7 @@ class _S04SmartScanState extends State<S04SmartScan>
         _showMessage(
           'Tidak ditemukan teks pada foto.',
         );
+
         return;
       }
 
@@ -1679,7 +1959,9 @@ class _S04SmartScanState extends State<S04SmartScan>
       );
     } finally {
       if (recognizer != null) {
-        await recognizer.close();
+        try {
+          await recognizer.close();
+        } catch (_) {}
       }
 
       if (mounted) {
@@ -1705,6 +1987,8 @@ class _S04SmartScanState extends State<S04SmartScan>
     });
 
     try {
+      // Flash otomatis dimatikan sebelum
+      // membuka halaman impor.
       await _stopCamera();
 
       if (!mounted) return;
@@ -1808,6 +2092,7 @@ class _S04SmartScanState extends State<S04SmartScan>
 
   // ========================================
   // AREA SCANNER
+  // FLASH + MINI ZOOM GLASS
   // ========================================
 
   Widget _buildScanner(
@@ -1897,14 +2182,15 @@ class _S04SmartScanState extends State<S04SmartScan>
           ),
 
           // ==================================
-          // MINI ZOOM GLASS
+          // FLASH + MINI ZOOM GLASS
+          // FLASH KIRI - ZOOM KANAN
           // ==================================
 
           Positioned(
             left: 17,
             right: 17,
             bottom: 16,
-            child: _buildZoomControl(),
+            child: _buildCameraBottomControls(),
           ),
         ],
       ),
@@ -1947,7 +2233,7 @@ class _S04SmartScanState extends State<S04SmartScan>
       children: [
         InkWell(
           borderRadius: BorderRadius.circular(60),
-          onTap: _cameraReady && !_busy
+          onTap: _cameraReady && !_busy && !_changingFlash
               ? () {
                   unawaited(_scanCamera());
                 }
@@ -2181,10 +2467,15 @@ class _S04SmartScanState extends State<S04SmartScan>
     WidgetsBinding.instance.removeObserver(this);
 
     final controller = _camera;
+
     _camera = null;
 
+    // Tunggu operasi kamera sebelum dispose.
+    // Flash juga dimatikan melalui fungsi ini.
     if (controller != null) {
-      unawaited(controller.dispose());
+      unawaited(
+        _disposeCameraSafely(controller),
+      );
     }
 
     super.dispose();
