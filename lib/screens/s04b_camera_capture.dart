@@ -1,14 +1,15 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:image/image.dart' as img;
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 
-// ==========================================
 // LASTSEEN - FULLSCREEN CAMERA
-// MINI GLASS ZOOM + SAFE CAMERA EXIT
-// ==========================================
+// MINI GLASS ZOOM + SAFE CAMERA EXIT + OCR CROP
 
 class S04BCameraCapture extends StatefulWidget {
   const S04BCameraCapture({super.key});
@@ -25,18 +26,12 @@ enum _FrameCorner {
 }
 
 class _S04BCameraCaptureState extends State<S04BCameraCapture> {
-  // ========================================
   // WARNA
-  // ========================================
-
   static const Color primary = Color(0xFF4361EE);
   static const Color navy = Color(0xFF15192D);
   static const Color glassColor = Color(0xFF454B61);
 
-  // ========================================
   // CAMERA
-  // ========================================
-
   CameraController? _controller;
   Future<void>? _initializationFuture;
 
@@ -48,34 +43,24 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
 
   String? _error;
 
-  // ========================================
   // BAHASA
-  // ========================================
-
   String _sourceLanguage = 'English';
   String _targetLanguage = 'Indonesia';
 
-  // ========================================
   // ZOOM
-  // ========================================
-
   double _minZoom = 1.0;
   double _maxZoom = 1.0;
   double _zoom = 1.0;
 
-  // Mini Zoom Glass.
   bool _zoomPanelOpen = false;
   bool _zoomDragging = false;
 
   Timer? _zoomHideTimer;
 
-  // Menyimpan operasi zoom yang masih
-  // berlangsung sebelum kamera ditutup.
   final Set<Future<void>> _zoomOperations = {};
 
-  // ========================================
   // BINGKAI SCAN
-  // ========================================
+  final GlobalKey _previewKey = GlobalKey();
 
   double _left = 0.09;
   double _top = 0.34;
@@ -128,14 +113,11 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
         return;
       }
 
-      // Preview kamera langsung ditampilkan.
       setState(() {
         _controller = candidate;
         _error = null;
       });
 
-      // Ambil batas zoom berdasarkan
-      // kemampuan kamera perangkat.
       try {
         final limits = await Future.wait<double>([
           candidate.getMinZoomLevel(),
@@ -161,8 +143,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
           await candidate.setZoomLevel(initialZoom);
         }
       } catch (_) {
-        // Preview tetap berjalan jika
-        // pengaturan zoom tidak tersedia.
+        // Preview tetap berjalan jika zoom tidak tersedia.
       }
     } on CameraException catch (e) {
       if (candidate != null && !identical(_controller, candidate)) {
@@ -211,7 +192,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // TUTUP ZOOM SECARA OTOMATIS
+  // TUTUP ZOOM OTOMATIS
   // ========================================
 
   void _scheduleZoomHide() {
@@ -236,7 +217,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // ZOOM SLIDER - METODE SEBELUMNYA
+  // ZOOM SLIDER
   // ========================================
 
   void _changeZoom(double value) {
@@ -252,21 +233,11 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
 
     final next = value.clamp(_minZoom, _maxZoom).toDouble();
 
-    // Perbarui angka dan posisi slider.
     setState(() {
       _zoom = next;
     });
 
-    // Kirim nilai secara langsung
-    // seperti slider zoom sebelumnya.
-    //
-    // Tidak menggunakan jeda 35 ms,
-    // perhitungan jarak jari, atau timer
-    // untuk mengatur frekuensi zoom.
-    final operation = controller.setZoomLevel(next).catchError((Object _) {
-      // Abaikan error jika kamera ditutup
-      // saat perubahan zoom berlangsung.
-    });
+    final operation = controller.setZoomLevel(next).catchError((Object _) {});
 
     _zoomOperations.add(operation);
 
@@ -276,10 +247,6 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
       }),
     );
   }
-
-  // ========================================
-  // FORMAT ANGKA ZOOM
-  // ========================================
 
   String _formatZoom(double zoom) {
     return zoom.toStringAsFixed(1);
@@ -309,14 +276,10 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                 horizontal: 18,
               ),
               decoration: BoxDecoration(
-                color: glassColor.withValues(
-                  alpha: 0.43,
-                ),
+                color: glassColor.withValues(alpha: 0.43),
                 borderRadius: BorderRadius.circular(30),
                 border: Border.all(
-                  color: Colors.white.withValues(
-                    alpha: 0.28,
-                  ),
+                  color: Colors.white.withValues(alpha: 0.28),
                 ),
               ),
               child: Row(
@@ -366,21 +329,15 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
             horizontal: 12,
           ),
           decoration: BoxDecoration(
-            color: glassColor.withValues(
-              alpha: 0.43,
-            ),
+            color: glassColor.withValues(alpha: 0.43),
             borderRadius: BorderRadius.circular(28),
             border: Border.all(
-              color: Colors.white.withValues(
-                alpha: 0.28,
-              ),
+              color: Colors.white.withValues(alpha: 0.28),
             ),
           ),
           child: Row(
             children: [
               const SizedBox(width: 6),
-
-              // ANGKA ZOOM
               SizedBox(
                 width: 52,
                 child: Text(
@@ -392,19 +349,13 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                   ),
                 ),
               ),
-
-              // SLIDER ZOOM
               Expanded(
                 child: SliderTheme(
                   data: SliderTheme.of(context).copyWith(
                     activeTrackColor: primary,
-                    inactiveTrackColor: Colors.white.withValues(
-                      alpha: 0.25,
-                    ),
+                    inactiveTrackColor: Colors.white.withValues(alpha: 0.25),
                     thumbColor: primary,
-                    overlayColor: primary.withValues(
-                      alpha: 0.15,
-                    ),
+                    overlayColor: primary.withValues(alpha: 0.15),
                     trackHeight: 3.5,
                     thumbShape: const RoundSliderThumbShape(
                       enabledThumbRadius: 10,
@@ -414,42 +365,24 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                     min: _minZoom,
                     max: zoomReady ? _maxZoom : _minZoom + 1.0,
                     value: zoomReady
-                        ? _zoom
-                            .clamp(
-                              _minZoom,
-                              _maxZoom,
-                            )
-                            .toDouble()
+                        ? _zoom.clamp(_minZoom, _maxZoom).toDouble()
                         : _minZoom,
-
-                    // Ketika pengguna mulai geser,
-                    // batalkan timer penutup.
                     onChangeStart: zoomReady
                         ? (_) {
                             _zoomHideTimer?.cancel();
-
                             _zoomDragging = true;
                           }
                         : null,
-
-                    // Metode slider yang sebelumnya
-                    // terasa smooth.
                     onChanged: zoomReady ? _changeZoom : null,
-
-                    // Setelah selesai digeser,
-                    // tutup otomatis dalam 2 detik.
                     onChangeEnd: zoomReady
                         ? (_) {
                             _zoomDragging = false;
-
                             _scheduleZoomHide();
                           }
                         : null,
                   ),
                 ),
               ),
-
-              // TOMBOL TUTUP
               IconButton(
                 tooltip: 'Tutup zoom',
                 onPressed: _toggleZoomPanel,
@@ -472,7 +405,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
-  // TAMPILAN ZOOM MINI / TERBUKA
+  // TAMPILAN ZOOM
   // ========================================
 
   Widget _buildZoomControl() {
@@ -480,9 +413,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
       height: 54,
       child: Center(
         child: AnimatedSwitcher(
-          duration: const Duration(
-            milliseconds: 180,
-          ),
+          duration: const Duration(milliseconds: 180),
           switchInCurve: Curves.easeOut,
           switchOutCurve: Curves.easeIn,
           child: _zoomPanelOpen
@@ -506,7 +437,6 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
 
     setState(() {
       final previous = _sourceLanguage;
-
       _sourceLanguage = _targetLanguage;
       _targetLanguage = previous;
     });
@@ -678,14 +608,10 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
         child: Container(
           height: 49,
           decoration: BoxDecoration(
-            color: glassColor.withValues(
-              alpha: 0.43,
-            ),
+            color: glassColor.withValues(alpha: 0.43),
             borderRadius: BorderRadius.circular(28),
             border: Border.all(
-              color: Colors.white.withValues(
-                alpha: 0.28,
-              ),
+              color: Colors.white.withValues(alpha: 0.28),
             ),
           ),
           child: Row(
@@ -764,14 +690,10 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                 width: 49,
                 height: 49,
                 decoration: BoxDecoration(
-                  color: glassColor.withValues(
-                    alpha: 0.43,
-                  ),
+                  color: glassColor.withValues(alpha: 0.43),
                   shape: BoxShape.circle,
                   border: Border.all(
-                    color: Colors.white.withValues(
-                      alpha: 0.28,
-                    ),
+                    color: Colors.white.withValues(alpha: 0.28),
                   ),
                 ),
                 child: Center(
@@ -885,8 +807,6 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
 
     final controller = _controller;
 
-    // Hilangkan CameraPreview dahulu
-    // sebelum melepas CameraController.
     if (mounted) {
       setState(() {
         _controller = null;
@@ -897,7 +817,6 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
       _controller = null;
     }
 
-    // Pastikan proses inisialisasi selesai.
     final initialization = _initializationFuture;
 
     if (initialization != null) {
@@ -906,8 +825,6 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
       } catch (_) {}
     }
 
-    // Pastikan perintah zoom sebelumnya
-    // tidak sedang memakai kamera.
     final operations = _zoomOperations.toList();
 
     if (operations.isNotEmpty) {
@@ -918,9 +835,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
 
     if (controller != null) {
       try {
-        await controller.setFlashMode(
-          FlashMode.off,
-        );
+        await controller.setFlashMode(FlashMode.off);
       } catch (_) {}
 
       try {
@@ -946,6 +861,146 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
   }
 
   // ========================================
+  // CROP GAMBAR SESUAI BINGKAI SCAN
+  // ========================================
+
+  Future<File> _cropScanFrame(
+    XFile photo,
+    Rect frame,
+    Size viewport,
+    Size preview,
+    bool mirrored,
+  ) async {
+    final bytes = await photo.readAsBytes();
+
+    final decodedImage = img.decodeImage(bytes);
+
+    if (decodedImage == null) {
+      throw StateError('Gambar tidak dapat dibaca.');
+    }
+
+    // Sesuaikan orientasi foto berdasarkan EXIF.
+    final image = img.bakeOrientation(decodedImage);
+
+    final imageWidth = image.width.toDouble();
+    final imageHeight = image.height.toDouble();
+
+    if (viewport.isEmpty || preview.isEmpty) {
+      throw StateError('Ukuran preview tidak valid.');
+    }
+
+    // Hitung area preview dengan BoxFit.cover.
+    final scale = math.max(
+      viewport.width / preview.width,
+      viewport.height / preview.height,
+    );
+
+    final renderedWidth = preview.width * scale;
+    final renderedHeight = preview.height * scale;
+
+    final offsetX = (renderedWidth - viewport.width) / 2;
+
+    final offsetY = (renderedHeight - viewport.height) / 2;
+
+    // Ubah koordinat layar menjadi koordinat relatif preview.
+    double normalizedLeft = (frame.left + offsetX) / renderedWidth;
+
+    double normalizedRight = (frame.right + offsetX) / renderedWidth;
+
+    final normalizedTop = (frame.top + offsetY) / renderedHeight;
+
+    final normalizedBottom = (frame.bottom + offsetY) / renderedHeight;
+
+    // Penyesuaian jika menggunakan kamera depan.
+    if (mirrored) {
+      final previousLeft = normalizedLeft;
+
+      normalizedLeft = 1.0 - normalizedRight;
+      normalizedRight = 1.0 - previousLeft;
+    }
+
+    // Sesuaikan perbedaan rasio preview dan foto.
+    final previewRatio = preview.width / preview.height;
+    final imageRatio = imageWidth / imageHeight;
+
+    double visibleWidth = imageWidth;
+    double visibleHeight = imageHeight;
+
+    double imageOffsetX = 0;
+    double imageOffsetY = 0;
+
+    if (imageRatio > previewRatio) {
+      visibleWidth = imageHeight * previewRatio;
+
+      imageOffsetX = (imageWidth - visibleWidth) / 2;
+    } else if (imageRatio < previewRatio) {
+      visibleHeight = imageWidth / previewRatio;
+
+      imageOffsetY = (imageHeight - visibleHeight) / 2;
+    }
+
+    // Konversi koordinat menjadi piksel foto.
+    final cropLeft = (imageOffsetX + normalizedLeft * visibleWidth)
+        .ceil()
+        .clamp(0, image.width - 1)
+        .toInt();
+
+    final cropTop = (imageOffsetY + normalizedTop * visibleHeight)
+        .ceil()
+        .clamp(0, image.height - 1)
+        .toInt();
+
+    final cropRight = (imageOffsetX + normalizedRight * visibleWidth)
+        .floor()
+        .clamp(cropLeft + 1, image.width)
+        .toInt();
+
+    final cropBottom = (imageOffsetY + normalizedBottom * visibleHeight)
+        .floor()
+        .clamp(cropTop + 1, image.height)
+        .toInt();
+
+    final cropWidth = cropRight - cropLeft;
+    final cropHeight = cropBottom - cropTop;
+
+    if (cropWidth <= 0 || cropHeight <= 0) {
+      throw StateError('Area bingkai tidak valid.');
+    }
+
+    // Potong gambar hanya pada area bingkai.
+    final croppedImage = img.copyCrop(
+      image,
+      x: cropLeft,
+      y: cropTop,
+      width: cropWidth,
+      height: cropHeight,
+    );
+
+    // Simpan hasil crop sebagai file sementara.
+    final croppedFile = File(
+      '${photo.path}_scan_crop.jpg',
+    );
+
+    try {
+      await croppedFile.writeAsBytes(
+        img.encodeJpg(
+          croppedImage,
+          quality: 95,
+        ),
+        flush: true,
+      );
+
+      return croppedFile;
+    } catch (_) {
+      if (await croppedFile.exists()) {
+        await croppedFile.delete();
+      }
+
+      rethrow;
+    }
+  }
+
+  // ========================================
   // OCR / PINDAI TEKS
   // ========================================
 
@@ -960,6 +1015,37 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
       return;
     }
 
+    final previewContext = _previewKey.currentContext;
+    final renderObject = previewContext?.findRenderObject();
+
+    final previewSize = controller.value.previewSize;
+
+    if (renderObject is! RenderBox ||
+        !renderObject.hasSize ||
+        previewSize == null) {
+      setState(() {
+        _error = 'Preview kamera belum siap.';
+      });
+
+      return;
+    }
+
+    final viewport = renderObject.size;
+
+    // Preview menggunakan orientasi portrait.
+    final preview = Size(
+      previewSize.height,
+      previewSize.width,
+    );
+
+    // Simpan posisi bingkai saat tombol scan ditekan.
+    final frame = Rect.fromLTRB(
+      _left * viewport.width,
+      _top * viewport.height,
+      _right * viewport.width,
+      _bottom * viewport.height,
+    );
+
     setState(() {
       _busy = true;
       _error = null;
@@ -969,20 +1055,49 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
       script: TextRecognitionScript.latin,
     );
 
-    try {
-      final photo = await controller.takePicture();
+    File? croppedFile;
+    XFile? photo;
 
+    try {
+      // Tunggu inisialisasi dan operasi zoom selesai.
+      final initialization = _initializationFuture;
+
+      if (initialization != null) {
+        await initialization;
+      }
+
+      final operations = _zoomOperations.toList();
+
+      if (operations.isNotEmpty) {
+        await Future.wait(operations);
+      }
+
+      if (!mounted || _closing) return;
+
+      // Ambil foto.
+      photo = await controller.takePicture();
+
+      // Crop foto sesuai area bingkai.
+      croppedFile = await _cropScanFrame(
+        photo,
+        frame,
+        viewport,
+        preview,
+        controller.description.lensDirection == CameraLensDirection.front,
+      );
+
+      // OCR hanya membaca gambar hasil crop.
       final result = await recognizer.processImage(
-        InputImage.fromFilePath(photo.path),
+        InputImage.fromFilePath(croppedFile.path),
       );
 
       final scannedText = result.text.trim();
 
-      if (!mounted) return;
+      if (!mounted || _closing) return;
 
       if (scannedText.isEmpty) {
         setState(() {
-          _error = 'Tidak ada teks terdeteksi. '
+          _error = 'Tidak ada teks di dalam bingkai. '
               'Arahkan kamera lebih dekat.';
         });
       } else {
@@ -995,7 +1110,29 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
         });
       }
     } finally {
-      await recognizer.close();
+      try {
+        await recognizer.close();
+      } catch (_) {}
+
+      // Hapus gambar sementara hasil crop.
+      if (croppedFile != null) {
+        try {
+          if (await croppedFile.exists()) {
+            await croppedFile.delete();
+          }
+        } catch (_) {}
+      }
+
+      // Hapus foto asli sementara.
+      if (photo != null) {
+        try {
+          final originalFile = File(photo.path);
+
+          if (await originalFile.exists()) {
+            await originalFile.delete();
+          }
+        } catch (_) {}
+      }
 
       if (mounted && !_closing) {
         setState(() {
@@ -1013,6 +1150,8 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
     Offset delta,
     Size size,
   ) {
+    if (_busy || _closing) return;
+
     final dx = delta.dx / size.width;
     final dy = delta.dy / size.height;
 
@@ -1053,6 +1192,8 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
     Offset delta,
     Size size,
   ) {
+    if (_busy || _closing) return;
+
     final dx = delta.dx / size.width;
     final dy = delta.dy / size.height;
 
@@ -1072,6 +1213,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                 _bottom - 0.18,
               )
               .toDouble();
+
           break;
 
         case _FrameCorner.topRight:
@@ -1088,6 +1230,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                 _bottom - 0.18,
               )
               .toDouble();
+
           break;
 
         case _FrameCorner.bottomLeft:
@@ -1104,6 +1247,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                 0.90,
               )
               .toDouble();
+
           break;
 
         case _FrameCorner.bottomRight:
@@ -1120,6 +1264,7 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
                 0.90,
               )
               .toDouble();
+
           break;
       }
 
@@ -1375,7 +1520,10 @@ class _S04BCameraCaptureState extends State<S04BCameraCapture> {
           children: [
             // PREVIEW KAMERA
             Positioned.fill(
-              child: _buildPreview(),
+              child: SizedBox.expand(
+                key: _previewKey,
+                child: _buildPreview(),
+              ),
             ),
 
             // BINGKAI SCAN
