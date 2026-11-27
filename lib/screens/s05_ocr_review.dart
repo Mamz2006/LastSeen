@@ -62,23 +62,33 @@ class _S05OcrReviewState extends State<S05OcrReview> {
   bool _sentenceSaved = false;
   bool _speaking = false;
 
-  String get _translatedText => widget.translatedText?.trim() ?? '';
+  late final bool _initialEnglishToIndonesian;
+  late bool _englishToIndonesian;
+
+  // Terjemahan yang diterima hanya berlaku untuk arah bahasa saat ini.
+  // Jika arah ditukar, jangan tampilkan hasil lama sebagai terjemahan baru.
+  String get _translatedText =>
+      _englishToIndonesian == _initialEnglishToIndonesian
+          ? (widget.translatedText?.trim() ?? '')
+          : '';
 
   bool get _hasTranslation => _translatedText.isNotEmpty;
 
   String get _sourceLanguage =>
-      widget.englishToIndonesian ? 'English' : 'Indonesia';
+      _englishToIndonesian ? 'English' : 'Indonesia';
 
   String get _targetLanguage =>
-      widget.englishToIndonesian ? 'Indonesia' : 'English';
+      _englishToIndonesian ? 'Indonesia' : 'English';
 
-  String get _sourceCode => widget.englishToIndonesian ? 'en' : 'id';
+  String get _sourceCode => _englishToIndonesian ? 'en' : 'id';
 
   @override
   void initState() {
     super.initState();
 
     _originalText = widget.initialText?.trim() ?? '';
+    _initialEnglishToIndonesian = widget.englishToIndonesian;
+    _englishToIndonesian = widget.englishToIndonesian;
 
     _setupAudio();
     _loadSavedWords();
@@ -126,7 +136,7 @@ class _S05OcrReviewState extends State<S05OcrReview> {
     }
 
     final bool english =
-        isOriginal ? widget.englishToIndonesian : !widget.englishToIndonesian;
+        isOriginal ? _englishToIndonesian : !_englishToIndonesian;
 
     final languageCode = english ? 'en-US' : 'id-ID';
 
@@ -229,6 +239,11 @@ class _S05OcrReviewState extends State<S05OcrReview> {
   }
 
   String _getMeaning(String word) {
+    // Arti dari dataset awal tidak boleh dipakai untuk arah sebaliknya.
+    if (_englishToIndonesian != _initialEnglishToIndonesian) {
+      return '';
+    }
+
     final normalized = word.toLowerCase().trim();
 
     for (final entry in widget.wordMeanings.entries) {
@@ -640,6 +655,21 @@ class _S05OcrReviewState extends State<S05OcrReview> {
   // PILIHAN BAHASA
   // ==================================================
 
+  void _toggleLanguageDirection() {
+    if (_speaking) {
+      _stopAudio();
+    }
+
+    setState(() {
+      _englishToIndonesian = !_englishToIndonesian;
+
+      // Status simpan kalimat mengikuti arah bahasa yang sedang dipilih.
+      _sentenceSaved = _savedIds.contains(_sentenceId);
+    });
+
+    _showMessage('Arah bahasa: $_sourceLanguage → $_targetLanguage');
+  }
+
   Widget _buildLanguageBar() {
     return Container(
       height: 59,
@@ -664,11 +694,7 @@ class _S05OcrReviewState extends State<S05OcrReview> {
           ),
           IconButton(
             tooltip: 'Arah bahasa',
-            onPressed: () {
-              _showMessage(
-                'Pilihan bahasa mengikuti halaman Scan.',
-              );
-            },
+            onPressed: _toggleLanguageDirection,
             style: IconButton.styleFrom(
               backgroundColor: const Color(0xFFE9EEFF),
             ),
