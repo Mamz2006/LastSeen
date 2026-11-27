@@ -40,7 +40,6 @@ class _S04SmartScanState extends State<S04SmartScan>
   static const Color lightBlue = Color(0xFFE9EEFF);
   static const Color glassColor = Color(0xFF454B61);
   static const Color borderGrey = Color(0xFFDDE3F0);
-  static const Color flashActiveColor = Color(0xFFFFD54F);
 
   // ========================================
   // CAMERA
@@ -649,12 +648,14 @@ class _S04SmartScanState extends State<S04SmartScan>
 
   // ========================================
   // MINI FLASH GLASS BUTTON
+  // SAME DESIGN AS FULLSCREEN CAMERA
+  //
+  // FLASH ON  : IKON PETIR PUTIH
+  // FLASH OFF : IKON PETIR PUTIH DICORET
   // ========================================
 
   Widget _buildMiniFlashButton() {
     final enabled = _flashAvailable;
-
-    final iconColor = _flashOn ? flashActiveColor : Colors.white;
 
     final tooltip = _flashOn ? 'Matikan flash' : 'Nyalakan flash';
 
@@ -665,8 +666,7 @@ class _S04SmartScanState extends State<S04SmartScan>
       label: tooltip,
       child: Tooltip(
         message: tooltip,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(30),
+        child: ClipOval(
           child: BackdropFilter(
             filter: ImageFilter.blur(
               sigmaX: 15,
@@ -680,58 +680,43 @@ class _S04SmartScanState extends State<S04SmartScan>
                         unawaited(_toggleFlash());
                       }
                     : null,
-                borderRadius: BorderRadius.circular(30),
-                child: AnimatedContainer(
-                  duration: const Duration(
-                    milliseconds: 180,
-                  ),
-                  width: 48,
-                  height: 48,
+                customBorder: const CircleBorder(),
+                child: Container(
+                  width: 44,
+                  height: 44,
                   decoration: BoxDecoration(
-                    color: _flashOn
-                        ? flashActiveColor.withValues(
-                            alpha: 0.16,
-                          )
-                        : glassColor.withValues(
-                            alpha: 0.43,
-                          ),
-                    borderRadius: BorderRadius.circular(30),
+                    color: glassColor.withValues(
+                      alpha: 0.43,
+                    ),
+                    shape: BoxShape.circle,
                     border: Border.all(
-                      color: _flashOn
-                          ? flashActiveColor.withValues(
-                              alpha: 0.65,
-                            )
-                          : Colors.white.withValues(
-                              alpha: 0.28,
-                            ),
+                      color: Colors.white.withValues(
+                        alpha: 0.28,
+                      ),
                       width: 1,
                     ),
                   ),
                   child: Center(
                     child: _changingFlash
                         ? const SizedBox(
-                            width: 17,
-                            height: 17,
+                            width: 15,
+                            height: 15,
                             child: CircularProgressIndicator(
                               color: Colors.white,
-                              strokeWidth: 1.8,
+                              strokeWidth: 1.6,
                             ),
                           )
                         : AnimatedSwitcher(
                             duration: const Duration(
-                              milliseconds: 180,
+                              milliseconds: 150,
                             ),
                             child: Icon(
                               _flashOn
                                   ? Icons.flash_on_rounded
                                   : Icons.flash_off_rounded,
                               key: ValueKey(_flashOn),
-                              color: enabled
-                                  ? iconColor
-                                  : iconColor.withValues(
-                                      alpha: 0.45,
-                                    ),
-                              size: 22,
+                              color: enabled ? Colors.white : Colors.white54,
+                              size: 19,
                             ),
                           ),
                   ),
