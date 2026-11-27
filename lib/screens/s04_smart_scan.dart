@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:camera/camera.dart';
@@ -6,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:image/image.dart' as img;
 
 import '../nav.dart';
 import 's04b_camera_capture.dart';
@@ -14,7 +17,7 @@ import 's06_import_document.dart';
 
 // ==========================================
 // LASTSEEN - SMART SCAN REAL-TIME
-// MINI ZOOM GLASS + LIVE CAMERA + OCR
+// MINI ZOOM GLASS + LIVE CAMERA + OCR CROP
 // ==========================================
 
 class S04SmartScan extends StatefulWidget {
@@ -58,6 +61,17 @@ class _S04SmartScanState extends State<S04SmartScan>
   String? _error;
 
   final ImagePicker _imagePicker = ImagePicker();
+
+  // ========================================
+  // BATAS AREA SCAN
+  // ========================================
+
+  final GlobalKey _previewKey = GlobalKey();
+  final GlobalKey _scanFrameKey = GlobalKey();
+
+  static const double _frameHorizontal = 34.0;
+  static const double _frameTop = 0.23;
+  static const double _frameBottom = 0.22;
 
   // ========================================
   // BAHASA
@@ -407,7 +421,6 @@ class _S04SmartScanState extends State<S04SmartScan>
 
   // ========================================
   // MEMBUKA / MENUTUP MINI ZOOM GLASS
-  // PERBAIKAN UTAMA TOMBOL TIDAK RESPONS
   // ========================================
 
   void _toggleZoomPanel() {
@@ -431,8 +444,7 @@ class _S04SmartScanState extends State<S04SmartScan>
 
     if (_zoomPanelOpen) {
       // Panel selalu terbuka jika kamera siap.
-      // Tidak lagi diblokir oleh:
-      // _maxZoom <= _minZoom
+      // Tidak diblokir oleh batas zoom.
       if (!_zoomLoading && !_zoomAvailable) {
         unawaited(_readZoomLimits());
       } else if (_zoomAvailable) {
@@ -513,7 +525,7 @@ class _S04SmartScanState extends State<S04SmartScan>
           color: Colors.transparent,
           child: InkWell(
             // Tetap bisa ditekan.
-            // Fungsi akan memberikan pesan
+            // Fungsi memberikan pesan
             // jika kamera belum siap.
             onTap: _toggleZoomPanel,
             borderRadius: BorderRadius.circular(30),
@@ -673,7 +685,7 @@ class _S04SmartScanState extends State<S04SmartScan>
                         _zoomHideTimer?.cancel();
                         _zoomDragging = true;
                       },
-                      onChanged: _changeZoom,
+                      onChanged: _busy ? null : _changeZoom,
                       onChangeEnd: (_) {
                         _zoomDragging = false;
                         _scheduleZoomHide();
@@ -1145,7 +1157,276 @@ class _S04SmartScanState extends State<S04SmartScan>
   }
 
   // ========================================
+  // MENGAMBIL KOORDINAT BINGKAI SCAN
+  // ========================================
+
+  Rect? _getScanFrame() {
+    final previewContext = _previewKey.currentContext;
+    final frameContext = _scanFrameKey.currentContext;
+
+    if (previewContext == null || frameContext == null) {
+      return null;
+    }
+
+    final previewObject = previewContext.findRenderObject();
+
+    final frameObject = frameContext.findRenderObject();
+
+    if (previewObject is! RenderBox ||
+        frameObject is! RenderBox ||
+        !previewObject.hasSize ||
+        !frameObject.hasSize) {
+      return null;
+    }
+
+    if (previewObject.size.isEmpty || frameObject.size.isEmpty) {
+      return null;
+    }
+
+    // Ambil posisi bingkai yang benar-benar
+    // ditampilkan pada layar.
+    final globalTopLeft = frameObject.localToGlobal(
+      Offset.zero,
+    );
+
+    final globalBottomRight = frameObject.localToGlobal(
+      Offset(
+        frameObject.size.width,
+        frameObject.size.height,
+      ),
+    );
+
+    // Konversi posisi bingkai ke dalam
+    // koordinat lokal preview kamera.
+    final localTopLeft = previewObject.globalToLocal(
+      globalTopLeft,
+    );
+
+    final localBottomRight = previewObject.globalToLocal(
+      globalBottomRight,
+    );
+
+    final frame = Rect.fromPoints(
+      localTopLeft,
+      localBottomRight,
+    );
+
+    final previewRect = Offset.zero & previewObject.size;
+
+    final clippedFrame = frame.intersect(
+      previewRect,
+    );
+
+    if (clippedFrame.isEmpty) {
+      return null;
+    }
+
+    return clippedFrame;
+  }
+
+  // ========================================
+  // CROP GAMBAR SESUAI BINGKAI SMART SCAN
+  // ========================================
+
+  Future<File> _cropScanFrame({
+    required XFile photo,
+    required Rect frame,
+    required Size viewport,
+    required Size preview,
+    required bool mirrored,
+  }) async {
+    final bytes = await photo.readAsBytes();
+
+    final decodedImage = img.decodeImage(bytes);
+
+    if (decodedImage == null) {
+      throw StateError(
+        'Gambar tidak dapat dibaca.',
+      );
+    }
+
+    // Sesuaikan orientasi foto berdasarkan EXIF.
+    final image = img.bakeOrientation(
+      decodedImage,
+    );
+
+    final imageWidth = image.width.toDouble();
+    final imageHeight = image.height.toDouble();
+
+    if (viewport.isEmpty || preview.isEmpty) {
+      throw StateError(
+        'Ukuran preview kamera tidak valid.',
+      );
+    }
+
+    // ======================================
+    // HITUNG BOXFIT.COVER
+    // ======================================
+
+    final scale = math.max(
+      viewport.width / preview.width,
+      viewport.height / preview.height,
+    );
+
+    final renderedWidth = preview.width * scale;
+    final renderedHeight = preview.height * scale;
+
+    final offsetX = (renderedWidth - viewport.width) / 2;
+
+    final offsetY = (renderedHeight - viewport.height) / 2;
+
+    // ======================================
+    // NORMALISASI KOORDINAT BINGKAI
+    // ======================================
+
+    double normalizedLeft = (frame.left + offsetX) / renderedWidth;
+
+    double normalizedRight = (frame.right + offsetX) / renderedWidth;
+
+    final normalizedTop = (frame.top + offsetY) / renderedHeight;
+
+    final normalizedBottom = (frame.bottom + offsetY) / renderedHeight;
+
+    // Penyesuaian jika kamera depan digunakan.
+    if (mirrored) {
+      final previousLeft = normalizedLeft;
+
+      normalizedLeft = 1.0 - normalizedRight;
+      normalizedRight = 1.0 - previousLeft;
+    }
+
+    // ======================================
+    // SESUAIKAN RASIO PREVIEW DAN FOTO
+    // ======================================
+
+    final previewRatio = preview.width / preview.height;
+
+    final imageRatio = imageWidth / imageHeight;
+
+    double visibleWidth = imageWidth;
+    double visibleHeight = imageHeight;
+
+    double imageOffsetX = 0;
+    double imageOffsetY = 0;
+
+    if (imageRatio > previewRatio) {
+      visibleWidth = imageHeight * previewRatio;
+
+      imageOffsetX = (imageWidth - visibleWidth) / 2;
+    } else if (imageRatio < previewRatio) {
+      visibleHeight = imageWidth / previewRatio;
+
+      imageOffsetY = (imageHeight - visibleHeight) / 2;
+    }
+
+    // ======================================
+    // KONVERSI KE PIKSEL GAMBAR
+    // ======================================
+
+    final cropLeft = (imageOffsetX + normalizedLeft * visibleWidth)
+        .ceil()
+        .clamp(
+          0,
+          image.width - 1,
+        )
+        .toInt();
+
+    final cropTop = (imageOffsetY + normalizedTop * visibleHeight)
+        .ceil()
+        .clamp(
+          0,
+          image.height - 1,
+        )
+        .toInt();
+
+    final cropRight = (imageOffsetX + normalizedRight * visibleWidth)
+        .floor()
+        .clamp(
+          cropLeft + 1,
+          image.width,
+        )
+        .toInt();
+
+    final cropBottom = (imageOffsetY + normalizedBottom * visibleHeight)
+        .floor()
+        .clamp(
+          cropTop + 1,
+          image.height,
+        )
+        .toInt();
+
+    final cropWidth = cropRight - cropLeft;
+    final cropHeight = cropBottom - cropTop;
+
+    if (cropWidth <= 0 || cropHeight <= 0) {
+      throw StateError(
+        'Area bingkai scan tidak valid.',
+      );
+    }
+
+    // ======================================
+    // POTONG GAMBAR
+    // ======================================
+
+    final croppedImage = img.copyCrop(
+      image,
+      x: cropLeft,
+      y: cropTop,
+      width: cropWidth,
+      height: cropHeight,
+    );
+
+    // ======================================
+    // SIMPAN HASIL CROP SEMENTARA
+    // ======================================
+
+    final croppedFile = File(
+      '${photo.path}_smart_scan_crop.jpg',
+    );
+
+    try {
+      await croppedFile.writeAsBytes(
+        img.encodeJpg(
+          croppedImage,
+          quality: 95,
+        ),
+        flush: true,
+      );
+
+      return croppedFile;
+    } catch (_) {
+      try {
+        if (await croppedFile.exists()) {
+          await croppedFile.delete();
+        }
+      } catch (_) {}
+
+      rethrow;
+    }
+  }
+
+  // ========================================
+  // MEMBERSIHKAN FOTO SEMENTARA
+  // ========================================
+
+  Future<void> _deleteTemporaryFile(
+    File? file,
+  ) async {
+    if (file == null) return;
+
+    try {
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (_) {
+      // Abaikan jika file sudah dihapus
+      // atau tidak dapat diakses.
+    }
+  }
+
+  // ========================================
   // PINDAI KAMERA REAL-TIME
+  // OCR HANYA MEMBACA AREA BINGKAI
   // ========================================
 
   Future<void> _scanCamera() async {
@@ -1154,6 +1435,35 @@ class _S04SmartScanState extends State<S04SmartScan>
     if (controller == null || !_cameraReady || _busy) {
       return;
     }
+
+    final previewObject = _previewKey.currentContext?.findRenderObject();
+
+    final previewSize = controller.value.previewSize;
+
+    final frame = _getScanFrame();
+
+    if (previewObject is! RenderBox ||
+        !previewObject.hasSize ||
+        previewSize == null ||
+        frame == null) {
+      _showMessage(
+        'Area scan belum siap. Coba lagi.',
+      );
+
+      return;
+    }
+
+    // Ukuran area preview kamera.
+    final viewport = previewObject.size;
+
+    // Preview menggunakan orientasi portrait.
+    final preview = Size(
+      previewSize.height,
+      previewSize.width,
+    );
+
+    final mirrored =
+        controller.description.lensDirection == CameraLensDirection.front;
 
     setState(() {
       _busy = true;
@@ -1164,24 +1474,108 @@ class _S04SmartScanState extends State<S04SmartScan>
       script: TextRecognitionScript.latin,
     );
 
-    try {
-      final photo = await controller.takePicture();
+    XFile? photo;
+    File? croppedFile;
 
-      final result = await recognizer.processImage(
-        InputImage.fromFilePath(photo.path),
+    try {
+      // ====================================
+      // TUNGGU OPERASI ZOOM SELESAI
+      // ====================================
+
+      final operations = _zoomOperations.toList();
+
+      if (operations.isNotEmpty) {
+        await Future.wait(operations);
+      }
+
+      if (!mounted ||
+          _disposing ||
+          !_cameraReady ||
+          !identical(_camera, controller)) {
+        return;
+      }
+
+      // ====================================
+      // AMBIL FOTO
+      // ====================================
+
+      photo = await controller.takePicture();
+
+      if (!mounted ||
+          _disposing ||
+          !_cameraReady ||
+          !identical(_camera, controller)) {
+        return;
+      }
+
+      // ====================================
+      // CROP SESUAI BINGKAI SMART SCAN
+      // ====================================
+
+      croppedFile = await _cropScanFrame(
+        photo: photo,
+        frame: frame,
+        viewport: viewport,
+        preview: preview,
+        mirrored: mirrored,
       );
 
-      if (!mounted) return;
+      if (!mounted ||
+          _disposing ||
+          !_cameraReady ||
+          !identical(_camera, controller)) {
+        return;
+      }
+
+      // ====================================
+      // OCR HANYA MEMBACA HASIL CROP
+      // ====================================
+
+      final result = await recognizer.processImage(
+        InputImage.fromFilePath(
+          croppedFile.path,
+        ),
+      );
+
+      if (!mounted ||
+          _disposing ||
+          !_cameraReady ||
+          !identical(_camera, controller)) {
+        return;
+      }
 
       final text = result.text.trim();
 
       if (text.isEmpty) {
         _showMessage(
-          'Teks tidak terdeteksi. '
+          'Tidak ada teks di dalam bingkai. '
           'Coba dekatkan kamera.',
         );
+
         return;
       }
+
+      // Hapus foto sementara setelah OCR selesai.
+      await _deleteTemporaryFile(croppedFile);
+
+      croppedFile = null;
+
+      await _deleteTemporaryFile(
+        File(photo.path),
+      );
+
+      photo = null;
+
+      if (!mounted ||
+          _disposing ||
+          !_cameraReady ||
+          !identical(_camera, controller)) {
+        return;
+      }
+
+      // ====================================
+      // HENTIKAN KAMERA SEBELUM HASIL OCR
+      // ====================================
 
       _suspended = true;
 
@@ -1195,7 +1589,21 @@ class _S04SmartScanState extends State<S04SmartScan>
         'Gagal memindai teks. Coba lagi.',
       );
     } finally {
-      await recognizer.close();
+      try {
+        await recognizer.close();
+      } catch (_) {}
+
+      // Pastikan file sementara dibersihkan
+      // meskipun proses OCR gagal.
+      await _deleteTemporaryFile(
+        croppedFile,
+      );
+
+      if (photo != null) {
+        await _deleteTemporaryFile(
+          File(photo.path),
+        );
+      }
 
       if (mounted) {
         setState(() {
@@ -1210,6 +1618,7 @@ class _S04SmartScanState extends State<S04SmartScan>
 
   // ========================================
   // AMBIL FOTO DARI GALERI
+  // TETAP MEMBACA SELURUH FOTO
   // ========================================
 
   Future<void> _openGallery() async {
@@ -1246,6 +1655,8 @@ class _S04SmartScanState extends State<S04SmartScan>
         script: TextRecognitionScript.latin,
       );
 
+      // Galeri tidak menggunakan bingkai kamera,
+      // sehingga seluruh foto tetap dibaca.
       final result = await recognizer.processImage(
         InputImage.fromFilePath(photo.path),
       );
@@ -1412,25 +1823,39 @@ class _S04SmartScanState extends State<S04SmartScan>
       clipBehavior: Clip.antiAlias,
       child: Stack(
         children: [
-          // Kamera real-time.
+          // ==================================
+          // KAMERA REAL-TIME
+          // ==================================
+
           Positioned.fill(
-            child: _buildLivePreview(),
+            child: SizedBox.expand(
+              key: _previewKey,
+              child: _buildLivePreview(),
+            ),
           ),
 
-          // Empat sudut scan.
+          // ==================================
+          // EMPAT SUDUT SCAN
+          // SEKALIGUS BATAS AREA OCR
+          // ==================================
+
           Positioned(
-            left: 34,
-            right: 34,
-            top: scanHeight * 0.23,
-            bottom: scanHeight * 0.22,
+            left: _frameHorizontal,
+            right: _frameHorizontal,
+            top: scanHeight * _frameTop,
+            bottom: scanHeight * _frameBottom,
             child: IgnorePointer(
               child: CustomPaint(
+                key: _scanFrameKey,
                 painter: _ScannerCornersPainter(),
               ),
             ),
           ),
 
-          // Header glass.
+          // ==================================
+          // HEADER GLASS
+          // ==================================
+
           Positioned(
             top: 17,
             left: 17,
@@ -1438,7 +1863,10 @@ class _S04SmartScanState extends State<S04SmartScan>
             child: _buildScannerHeader(),
           ),
 
-          // Petunjuk scan.
+          // ==================================
+          // PETUNJUK SCAN
+          // ==================================
+
           Positioned(
             left: 20,
             right: 20,
@@ -1468,7 +1896,10 @@ class _S04SmartScanState extends State<S04SmartScan>
             ),
           ),
 
-          // Mini Zoom Glass.
+          // ==================================
+          // MINI ZOOM GLASS
+          // ==================================
+
           Positioned(
             left: 17,
             right: 17,
@@ -1696,7 +2127,12 @@ class _S04SmartScanState extends State<S04SmartScan>
   Widget build(BuildContext context) {
     final screenHeight = MediaQuery.sizeOf(context).height;
 
-    final scanHeight = (screenHeight * 0.59).clamp(360.0, 530.0).toDouble();
+    final scanHeight = (screenHeight * 0.59)
+        .clamp(
+          360.0,
+          530.0,
+        )
+        .toDouble();
 
     final embedded = MainTabShell.isEmbedded(context);
 
